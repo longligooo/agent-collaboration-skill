@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Collaboration"
+  short_description: "Coordinate file-based work across AI coding agents"
+  default_prompt: "Use $agent-collaboration to coordinate this task with another AI coding agent."
