@@ -67,8 +67,8 @@ python scripts/collab.py init-wake --root . --agents cursor codex claude-code
   "timeout": 1800,
   "agents": {
     "claude-code": {"command": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits", "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep"]},
-    "codex": {"command": ["codex", "exec", "--full-auto", "{prompt}"]},
-    "cursor": {"command": ["cursor-agent", "-p", "--force", "{prompt}"]},
+    "codex": {"command": ["codex", "exec", "--sandbox", "workspace-write", "--ask-for-approval", "never", "{prompt}"]},
+    "cursor": {"command": ["agent", "-p", "--force", "{prompt}"]},
     "human": {"notify_only": true, "command": ["notify-send", "Collaboration", "{thread_id} needs you: {document}"]}
   }
 }
@@ -78,7 +78,7 @@ python scripts/collab.py init-wake --root . --agents cursor codex claude-code
 | --- | --- |
 | Claude Code | `claude -p "<prompt>"` |
 | Codex | `codex exec "<prompt>"` |
-| Cursor | `cursor-agent -p "<prompt>"` (Cursor CLI) |
+| Cursor | `agent -p --force "<prompt>"` (Cursor CLI; older installs name the binary `cursor-agent`) |
 | Gemini CLI | `gemini -p "<prompt>"` |
 | Aider | `aider --message "<prompt>"` |
 

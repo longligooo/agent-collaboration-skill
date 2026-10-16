@@ -725,8 +725,18 @@ DEFAULT_WAKE_AGENTS: Dict[str, Dict[str, Any]] = {
             "Bash,Read,Edit,Write,Glob,Grep",
         ]
     },
-    "codex": {"command": ["codex", "exec", "--full-auto", "{prompt}"]},
-    "cursor": {"command": ["cursor-agent", "-p", "--force", "{prompt}"]},
+    "codex": {
+        "command": [
+            "codex",
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "never",
+            "{prompt}",
+        ]
+    },
+    "cursor": {"command": ["agent", "-p", "--force", "{prompt}"]},
     "gemini": {"command": ["gemini", "-p", "{prompt}", "--yolo"]},
 }
 

@@ -290,7 +290,7 @@ class WatchTest(unittest.TestCase):
         )
         self.assertEqual(result["unconfigured_agents"], ["aider"])
         config = json.loads((self.root / ".ai-collab/wake.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["agents"]["cursor"]["command"][0], "cursor-agent")
+        self.assertEqual(config["agents"]["cursor"]["command"][:3], ["agent", "-p", "--force"])
         self.assertEqual(config["agents"]["claude-code"]["command"][0], "claude")
         self.run_json("init-wake", "--root", str(self.root), "--agents", "codex", expected=2)
 

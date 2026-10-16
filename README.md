@@ -139,7 +139,7 @@ signals must follow their requested acknowledgement or closure action.
 Without automation, someone must tell each agent "a new message is waiting"
 after every turn. The `watch` command does that instead: it scans each agent's
 inbox and runs the recipient's non-interactive CLI (`claude -p`, `codex exec`,
-`cursor-agent -p`, `gemini -p`, ...) for one processing cycle whenever a signal
+`agent -p`, `gemini -p`, ...) for one processing cycle whenever a signal
 is waiting. Each reply creates the next signal, so the thread proceeds round by
 round until an agent publishes `AGREED`, `CLOSED`, or `CANCELLED`.
 
