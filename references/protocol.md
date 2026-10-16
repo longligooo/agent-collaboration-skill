@@ -96,7 +96,9 @@ Use roles as responsibilities, not product names:
 
 An agent may change role in a later turn. State the role in every turn.
 
-The participant named `coordinator` in the thread manifest is the special coordinating participant. That participant may read the repository and may write only:
+`coordinator` in the thread manifest is optional. Set it only when the human explicitly names one participant. `null` and an absent field both mean there is no coordinator, and then no participant is barred from editing product code.
+
+When the human does name one, that participant may read the repository and may write only:
 
 - turns they author;
 - signals the protocol tells them to publish;
@@ -155,7 +157,7 @@ Never publish a signal pointing at a missing or invalid turn.
 
 ## Concurrency
 
-A thread has one ordered round sequence. Do not let multiple agents allocate the same next round concurrently. The coordinator must either serialize those turns or create branch thread IDs such as `api-design-security` and `api-design-performance`.
+A thread has one ordered round sequence. Do not let multiple agents allocate the same next round concurrently. When a coordinator is designated, that participant serializes those turns or creates branch thread IDs such as `api-design-security` and `api-design-performance`. With no coordinator, the participants still must not reuse a round number.
 
 Fixed per-recipient signal files intentionally keep only the latest notification. Use a separate thread when every parallel event must be preserved.
 

@@ -25,7 +25,7 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - Stop on duplicate, invalid, mismatched, or stale signals without writing files.
 - Let a human instruction override the protocol and record that override in the next turn when collaboration continues.
 - Participant ids are names the human chooses. Do not treat `cursor`, `claude`, or `gpt` as identities. Record which tool runs a participant only in that participant's wake command.
-- The manifest coordinator coordinates only. That participant must not create, modify, or delete product code, configuration, or test files. They may run the project's existing tests to check results, and they may write their own turns, signals, and state file.
+- A coordinator exists only when the human passes `--coordinator`. That participant must not create, modify, or delete product code, configuration, or test files. They may run the project's existing tests and write their own turns, signals, and state file. With no `--coordinator`, no participant has that restriction.
 - Do not run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Publishing a turn is not a commit.
 
 ## Choose The Collaboration Action
@@ -46,7 +46,7 @@ Use roles independently of tools: `initiator`, `coordinator`, `proposer`, `chall
 
 ## Start A Thread
 
-1. Choose a stable lowercase `thread_id`, participant IDs, a coordinator, and a bounded objective.
+1. Choose a stable lowercase `thread_id`, participant IDs, and a bounded objective. Pass `--coordinator` only when the human names one.
 2. Initialize the workspace:
 
 ```bash
@@ -72,7 +72,7 @@ python scripts/collab.py init \
 python scripts/collab.py inspect --root . --agent frontend
 ```
 
-2. Act only on a `NEW` decision. For `TERMINAL`, follow the terminal action and acknowledge it. For `EMPTY`, `DUPLICATE`, or `INVALID`, do not create a response. If the manifest names you as coordinator, do the coordination in a turn and do not edit product code. Running the project's tests is allowed for acceptance.
+2. Act only on a `NEW` decision. For `TERMINAL`, follow the terminal action and acknowledge it. For `EMPTY`, `DUPLICATE`, or `INVALID`, do not create a response. If the manifest's `coordinator` is your id, do the coordination in a turn and do not edit product code. If `coordinator` is null, that restriction applies to nobody. Running the project's tests is allowed for acceptance.
 3. Read the referenced turn and every relevant source artifact. Continue earlier finding IDs until each is explicitly closed, deferred with owner and reason, or still open.
 4. Perform the requested action at the evidence level appropriate to the risk. Separate observations, inferences, and unverified claims.
 5. Create a new turn. Use `based_on` to identify the exact inputs and include commands, results, diffs, or file references that support the conclusion.

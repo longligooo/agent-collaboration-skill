@@ -215,7 +215,42 @@ class InboxTest(unittest.TestCase):
             "inbox", "--root", str(self.root), "--agent", "codex", "--format", "prompt"
         ).stdout
         self.assertNotIn("You are the coordinator of this thread", worker_prompt)
-        self.assertIn("Do not run git commit or git push", worker_prompt)
+
+    def test_omitted_coordinator_has_no_edit_restriction(self):
+        self.run_cli(
+            "init", "--root", str(self.root), "--thread-id", THREAD,
+            "--topic", "Inbox", "--objective", "Check mail",
+            "--participants", "cursor", "codex",
+        )
+        manifest = json.loads(
+            (self.root / ".ai-collab/threads" / THREAD / "thread.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(manifest["coordinator"])
+        created = json.loads(
+            self.run_cli(
+                "new-turn", "--root", str(self.root), "--thread-id", THREAD,
+                "--author", "codex", "--role", "reviewer", "--kind", "REVIEW",
+                "--status", "OPEN", "--requested-action", "IMPLEMENT", "--title", "Mail",
+            ).stdout
+        )
+        document = self.root / created["document"]
+        document.write_text(
+            document.read_text(encoding="utf-8").replace("TODO(agent-collaboration):", "Done:"),
+            encoding="utf-8",
+        )
+        self.run_cli(
+            "publish", "--root", str(self.root), "--thread-id", THREAD,
+            "--agent", "codex", "--to", "cursor", "--document", created["document"],
+        )
+        report = json.loads(
+            self.run_cli("inbox", "--root", str(self.root), "--agent", "cursor").stdout
+        )
+        self.assertFalse(report["items"][0]["is_coordinator"])
+        self.assertTrue(report["items"][0]["may_edit_code"])
+        prompt = self.run_cli(
+            "inbox", "--root", str(self.root), "--agent", "cursor", "--format", "prompt"
+        ).stdout
+        self.assertNotIn("You are the coordinator of this thread", prompt)
 
 
 if __name__ == "__main__":

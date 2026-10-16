@@ -211,7 +211,6 @@ def load_manifest(root: Path, thread_id: str) -> Dict[str, Any]:
             "thread_id",
             "topic",
             "objective",
-            "coordinator",
             "participants",
             "created_at",
         ),
@@ -224,7 +223,6 @@ def load_manifest(root: Path, thread_id: str) -> Dict[str, Any]:
     for field in ("topic", "objective"):
         if not isinstance(data[field], str) or not data[field].strip():
             raise CollaborationError(f"thread {field} must be a non-empty string")
-    validate_id(data["coordinator"], "coordinator")
     participants = data["participants"]
     if not isinstance(participants, list) or not participants:
         raise CollaborationError("thread participants must be a non-empty list")
@@ -234,10 +232,23 @@ def load_manifest(root: Path, thread_id: str) -> Dict[str, Any]:
         validate_id(participant, "participant")
     if len(set(participants)) != len(participants):
         raise CollaborationError("thread participants must be unique")
-    if data["coordinator"] not in participants:
-        raise CollaborationError("thread coordinator must be a participant")
+    coordinator = data.get("coordinator")
+    if coordinator is not None:
+        validate_id(coordinator, "coordinator")
+        if coordinator not in participants:
+            raise CollaborationError("thread coordinator must be a participant")
     validate_timestamp(data["created_at"])
     return data
+
+
+def designated_coordinator(manifest: Dict[str, Any]) -> Optional[str]:
+    """A coordinator exists only when the human set one. Null and absent mean none."""
+    coordinator = manifest.get("coordinator")
+    if coordinator is None:
+        return None
+    if not isinstance(coordinator, str):
+        raise CollaborationError("thread coordinator must be a participant id or null")
+    return coordinator
 
 
 def parse_turn(path: Path) -> Tuple[Dict[str, Any], str]:
@@ -464,13 +475,13 @@ def round_exists(root: Path, thread_id: str, round_number: int) -> bool:
 def cmd_init(args: argparse.Namespace) -> None:
     root = repository_root(args.root)
     thread_id = validate_id(args.thread_id, "thread_id")
-    coordinator = validate_id(args.coordinator, "coordinator")
+    coordinator = validate_id(args.coordinator, "coordinator") if args.coordinator else None
     participants: List[str] = []
     for raw in args.participants:
         participant = validate_id(raw, "participant")
         if participant not in participants:
             participants.append(participant)
-    if coordinator not in participants:
+    if coordinator is not None and coordinator not in participants:
         raise CollaborationError("coordinator must be included in participants")
     if not args.topic.strip() or not args.objective.strip():
         raise CollaborationError("topic and objective must be non-empty")
@@ -675,7 +686,7 @@ def inbox_report(root: Path, agent: str, thread_id: Optional[str] = None) -> Dic
 def participant_policy(root: Path, thread_id: str, agent: str) -> Dict[str, Any]:
     """The coordinator never edits product code. Acceptance may run tests. Nobody commits unless a human says so."""
     try:
-        is_coordinator = load_manifest(root, thread_id).get("coordinator") == agent
+        is_coordinator = designated_coordinator(load_manifest(root, thread_id)) == agent
     except CollaborationError:
         is_coordinator = False
     return {
@@ -1344,7 +1355,10 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--thread-id", required=True)
     init_parser.add_argument("--topic", required=True)
     init_parser.add_argument("--objective", required=True)
-    init_parser.add_argument("--coordinator", required=True)
+    init_parser.add_argument(
+        "--coordinator",
+        help="participant who coordinates only and must not edit product code; omit for no coordinator",
+    )
     init_parser.add_argument("--participants", nargs="+", required=True)
     init_parser.set_defaults(handler=cmd_init)
 

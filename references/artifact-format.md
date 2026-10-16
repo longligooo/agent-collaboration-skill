@@ -116,7 +116,7 @@ Signals are notifications, not the source of truth. The referenced turn wins if 
 }
 ```
 
-Do not mutate the manifest to express progress. Publish turns and signals instead.
+`coordinator` is a participant id, or `null` when the human did not name one. Only a non-null coordinator is barred from editing product code. Do not mutate the manifest to express progress. Publish turns and signals instead.
 
 ## Agent State
 
