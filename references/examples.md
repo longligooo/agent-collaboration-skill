@@ -1,5 +1,7 @@
 # Collaboration Examples
 
+These sequences start only after the requirement is already a spec and a ticket. The thread objective names that ticket. See [Tickets](tickets.md).
+
 ## Design Discussion
 
 1. `lead`, the coordinator, publishes a `PROPOSAL` requesting `CHALLENGE` from `frontend`. `lead` does not edit product code.

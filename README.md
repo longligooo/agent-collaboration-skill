@@ -37,6 +37,16 @@ No vendor API or background service is required.
 The canonical turn kinds are `DISCUSSION`, `PROPOSAL`, `CHALLENGE`, `REVISION`,
 `IMPLEMENTATION`, `REVIEW`, `VERIFICATION`, `DECISION`, and `CLOSURE`.
 
+## Tickets
+
+Write a human requirement as a spec and tickets before dispatch. One round may
+become several tickets, and each ticket locks one thing that can be accepted on
+its own. Do not start implementation, and do not open a collaboration thread,
+without a ticket for that work. Turns stay immutable; ticket status may change.
+`collab.py` does not parse tickets. See [Tickets](references/tickets.md). This
+repository stores them under `.scratch/<feature-slug>/`, as declared in
+[`.docs/agents/issue-tracker.md`](.docs/agents/issue-tracker.md).
+
 ## Repository Contents
 
 ```text
@@ -46,6 +56,8 @@ references/protocol.md         Canonical collaboration protocol
 references/artifact-format.md  Turn, signal, manifest, and state formats
 references/tool-adapters.md    Codex, Claude Code, Cursor, and generic adapters
 references/examples.md         Example collaboration sequences
+references/tickets.md          Spec and ticket format; required before dispatch
+.docs/agents/issue-tracker.md  This repository's ticket root
 scripts/collab.py              Standard-library protocol CLI
 scripts/ui_server.py           Local web UI server
 scripts/adapters/             Cursor, Claude Code, and ChatGPT callers of `inbox`
@@ -90,17 +102,19 @@ See [Tool Adapters](references/tool-adapters.md) for details.
 
 ## Quick Start
 
-Initialize a collaboration thread from the target repository:
+Write the spec and the ticket first. Then initialize a collaboration thread from the target repository. The objective names that ticket:
 
 ```bash
 python /path/to/agent-collaboration/scripts/collab.py init \
   --root . \
   --thread-id config-redesign \
   --topic "Configuration redesign" \
-  --objective "Agree on and verify the migration plan" \
+  --objective "Ticket .ai-collab/tickets/config-redesign/issues/01-migration-plan.md: agree on and verify the migration plan" \
   --coordinator lead \
   --participants lead frontend backend
 ```
+
+Use the project's declared ticket root in that path when it has one.
 
 Create the first immutable turn template:
 
