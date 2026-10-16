@@ -34,6 +34,7 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - Do not parse tickets into signals or the turn state machine. Turns stay immutable. Ticket status may change. Ticket comments are append-only.
 - Do not move a resolved ticket back to in progress. A new problem gets a new ticket number.
 - A ticket stays blocked until every ticket named in `Blocked by` is `resolved`. `wontfix` does not lift that block.
+- `--topic` is the readable thread title. Summarize it in the primary language of the human's conversation. A Chinese conversation gets a Chinese title. Keep `thread_id` as a stable ASCII slug.
 
 ## Choose The Collaboration Action
 
@@ -54,7 +55,7 @@ Use roles independently of tools: `initiator`, `coordinator`, `proposer`, `chall
 ## Start A Thread
 
 1. Confirm a ticket already covers this objective. If the human just stated a requirement and no ticket covers it, write the spec and the tickets first, then stop. Do not initialize a thread, and do not start implementation, without that ticket. A thread is a new association: do not reuse an older thread just because an older ticket looks related.
-2. Choose a stable lowercase `thread_id` and participant IDs. The objective names the ticket path. The default is one in-progress ticket and one thread. Parallel frontend and backend work on the same ticket uses two threads, and `Owner` names both. Pass `--coordinator` only when the human names one.
+2. Choose a stable lowercase `thread_id` and participant IDs. Set `--topic` to a short readable title summarized from this conversation, in its primary language. When the human writes in Chinese, the title is Chinese, such as `配置改造`, not `Configuration redesign`. Do not use the thread id or the full objective as the title. The objective names the ticket path. The default is one in-progress ticket and one thread. Parallel frontend and backend work on the same ticket uses two threads, and `Owner` names both. Pass `--coordinator` only when the human names one. The topic is fixed at init; later turns copy it.
 3. Initialize the workspace:
 
 ```bash
@@ -66,6 +67,8 @@ python scripts/collab.py init \
   --coordinator lead \
   --participants lead frontend backend
 ```
+
+The example topic is English because that sample conversation is English. For this same thread in a Chinese conversation, use `--topic "配置改造"` and keep `--thread-id config-redesign`. The web UI shows the topic as the thread name.
 
 Use the project's declared ticket root in that path when it has one. This repository declares `.scratch/<feature-slug>/` in `.docs/agents/issue-tracker.md`. The `.ai-collab/tickets/` path above is only the fallback.
 
@@ -177,7 +180,7 @@ Do not start the web UI during an ordinary turn. Start it only when the human ex
 python scripts/collab.py ui --root .
 ```
 
-This listens on `127.0.0.1:23451`. If a UI is already running, the command only registers the current repository and does not start a second process. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project.
+This listens on `127.0.0.1:23451`. The same command is used on Windows, macOS, and Linux. It probes that port first. If a UI is already running, the command only registers the current repository and does not start a second process. Do not skip the probe and start `ui --serve` by hand. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project. It does not refresh by itself. Use the 刷新 button.
 
 When the human asks to start the collaboration background, run this command and then start the wake script or `watch` they asked for.
 

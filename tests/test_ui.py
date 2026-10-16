@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import signal
@@ -7,8 +8,10 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.request import Request, urlopen
 
 
@@ -125,15 +128,26 @@ class UiTest(unittest.TestCase):
         request_json(port, "/api/register", {"root": str(second)})
 
         page = urlopen(f"http://127.0.0.1:{port}/app.js", timeout=3)
-        self.assertIn("总览".encode("utf-8"), page.read())
-        css = urlopen(f"http://127.0.0.1:{port}/app.css", timeout=3)
-        self.assertIn(b"color-scheme: dark", css.read())
+        script = page.read()
+        self.assertIn("总览".encode("utf-8"), script)
+        self.assertIn("刷新".encode("utf-8"), script)
+        self.assertIn("进行中".encode("utf-8"), script)
+        self.assertIn(b"collaboratorPills", script)
+        self.assertNotIn(b"setInterval", script)
+        css = urlopen(f"http://127.0.0.1:{port}/app.css", timeout=3).read()
+        self.assertIn(b"color-scheme: dark", css)
+        self.assertIn(b"status-open", css)
+        self.assertIn(b"status-agreed", css)
+        self.assertIn(b"status-cancelled", css)
         body = request_json(port, "/api/snapshot")
         self.assertEqual(body["overview"]["projects"], 2)
         self.assertEqual(body["overview"]["pending"], 2)
         lead = next(person for person in body["collaborators"] if person["id"] == "lead")
         self.assertEqual(sorted(project["name"] for project in lead["projects"]), ["alpha", "beta"])
         self.assertEqual(lead["pending"], 2)
+        alpha_thread = next(item for item in lead["threads"] if item["project_name"] == "alpha")
+        self.assertEqual(alpha_thread["coordinator"], "lead")
+        self.assertEqual(alpha_thread["participants"], ["frontend", "lead"])
         alpha = next(project for project in body["projects"] if project["name"] == "alpha")
         self.assertEqual(alpha["threads"][0]["coordinator"], "lead")
         self.assertIn("Ready:", alpha["threads"][0]["turns"][0]["summary"])
@@ -152,6 +166,34 @@ class UiTest(unittest.TestCase):
         self.assertEqual(request_json(port, "/api/health")["pid"], started["pid"])
         roots = set(request_json(port, "/api/health")["projects"])
         self.assertEqual(roots, {str(first.resolve()), str(second.resolve())})
+
+    def test_ui_server_does_not_import_fcntl_at_import_time(self):
+        tree = ast.parse(Path(ui_server.__file__).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+                self.assertNotIn("fcntl", names)
+            if isinstance(node, ast.ImportFrom):
+                self.assertNotEqual(node.module, "fcntl")
+
+    def test_windows_lock_uses_byte_range_and_spawn_avoids_setsid(self):
+        calls = []
+        fake = types.SimpleNamespace(
+            LK_LOCK=0,
+            LK_UNLCK=1,
+            locking=lambda fd, mode, nbytes: calls.append((mode, nbytes)),
+        )
+        handle = tempfile.TemporaryFile()
+        self.addCleanup(handle.close)
+        with mock.patch.dict(sys.modules, {"msvcrt": fake}):
+            with mock.patch.object(ui_server.os, "name", "nt"):
+                ui_server.lock_file(handle)
+                ui_server.unlock_file(handle)
+                spawned = ui_server.background_popen_kwargs()
+        self.assertEqual(calls, [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)])
+        self.assertNotIn("start_new_session", spawned)
+        self.assertEqual(spawned["creationflags"] & 0x00000200, 0x00000200)
+        self.assertEqual(spawned["creationflags"] & 0x08000000, 0x08000000)
 
 
 if __name__ == "__main__":

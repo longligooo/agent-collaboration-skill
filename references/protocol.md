@@ -29,6 +29,8 @@ Store protocol data under the repository root:
 
 Use lowercase ASCII letters, digits, dots, underscores, and hyphens for thread and participant IDs. A human chooses the names, and the names are not tool names. Keep them stable for the life of the thread. Do not place credentials, email addresses, or machine-specific paths in identifiers.
 
+The manifest `topic` is the readable title. Summarize it from the conversation in that conversation's primary language. A Chinese conversation gets a Chinese topic. The thread id stays ASCII either way. The topic is chosen once, when the thread is created. Later turns copy it and do not translate it.
+
 Record which tool runs a participant only where a wake command needs it, such as `lead=cursor` in the wake config. The protocol artifacts themselves do not name Cursor, Claude Code, or ChatGPT.
 
 Use UUIDs for signal `message_id` values. Use an integer round that increases for every new turn in a thread.
