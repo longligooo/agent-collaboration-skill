@@ -22,11 +22,11 @@ Start every turn with a structured JSON block inside an HTML comment:
   "topic": "Configuration redesign",
   "round": 2,
   "kind": "CHALLENGE",
-  "author": "codex",
+  "author": "frontend",
   "role": "challenger",
   "status": "NEEDS_CHANGES",
   "based_on": [
-    ".ai-collab/threads/config-redesign/turns/round-0001-from-cursor-proposal.md"
+    ".ai-collab/threads/config-redesign/turns/round-0001-from-lead-proposal.md"
   ],
   "requested_action": "REVISE",
   "created_at": "2026-08-03T14:30:00+08:00"
@@ -88,9 +88,9 @@ Use a fixed signal file for each recipient:
   "message_id": "550e8400-e29b-41d4-a716-446655440000",
   "thread_id": "config-redesign",
   "round": 2,
-  "from": "codex",
-  "to": "cursor",
-  "document": ".ai-collab/threads/config-redesign/turns/round-0002-from-codex-challenge.md",
+  "from": "frontend",
+  "to": "lead",
+  "document": ".ai-collab/threads/config-redesign/turns/round-0002-from-frontend-challenge.md",
   "kind": "CHALLENGE",
   "requested_action": "REVISE",
   "status": "NEEDS_CHANGES",
@@ -110,8 +110,8 @@ Signals are notifications, not the source of truth. The referenced turn wins if 
   "thread_id": "config-redesign",
   "topic": "Configuration redesign",
   "objective": "Agree on and verify the configuration migration plan",
-  "coordinator": "cursor",
-  "participants": ["cursor", "codex", "claude-code"],
+  "coordinator": "lead",
+  "participants": ["lead", "frontend", "backend"],
   "created_at": "2026-08-03T14:00:00+08:00"
 }
 ```
@@ -125,7 +125,7 @@ Each agent owns `state/<agent>.json`:
 ```json
 {
   "protocol_version": 1,
-  "agent": "codex",
+  "agent": "frontend",
   "processed_message_ids": [
     "550e8400-e29b-41d4-a716-446655440000"
   ],

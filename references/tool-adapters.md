@@ -21,14 +21,14 @@ Install or link the repository as a user or project skill, commonly:
 .claude/skills/agent-collaboration/
 ```
 
-Use a file-change hook or a manual invocation to react to `.ai-collab/threads/*/signals/to-claude-code.json`. Ignore state, turns authored by the same agent, and unrelated recipients. Disable temporary hooks after closure.
+Use a file-change hook or a manual invocation to react to `.ai-collab/threads/*/signals/to-<participant>.json` for the participant this tool runs. Ignore state, turns authored by the same participant, and unrelated recipients. Disable temporary hooks after closure.
 
 ## Cursor
 
 Keep the canonical skill in the repository or another stable local path. Add a Cursor project rule that instructs Cursor to:
 
 1. read `agent-collaboration/SKILL.md` and the referenced protocol;
-2. identify itself with a stable agent ID such as `cursor`;
+2. identify itself with the participant name the human chose, not with the tool name;
 3. run one inbox inspection when collaboration is requested;
 4. follow immutability and idempotency rules;
 5. avoid continuous polling unless separately configured.
@@ -57,7 +57,7 @@ If the tool has no skill system, provide this repository path in the prompt and 
 Cursor, Claude Code, and ChatGPT each wake their own conversation differently. All three call the same query:
 
 ```bash
-python scripts/collab.py inbox --root /path/to/repo --agent cursor --format text
+python scripts/collab.py inbox --root /path/to/repo --agent lead --format text
 ```
 
 | Exit code | Meaning |
@@ -73,24 +73,24 @@ python scripts/collab.py inbox --root /path/to/repo --agent cursor --format text
 Cursor can keep a background script that resumes a conversation:
 
 ```bash
-CURSOR_CHAT_ID=<chat-id> sh scripts/adapters/cursor-wake.sh /path/to/repo
+CURSOR_CHAT_ID=<chat-id> sh scripts/adapters/cursor-wake.sh /path/to/repo lead
 ```
 
-The script calls `inbox --format prompt` and, only when that exits 0, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with the printed prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`.
+`lead` is the participant name. The script calls `inbox --format prompt` for that name and, only when that exits 0, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with the printed prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`. The prompt tells the coordinator not to edit product code, and tells every participant not to commit.
 
 ### Claude Code
 
 Claude Code uses the same pattern:
 
 ```bash
-CLAUDE_SESSION_ID=<session-id> sh scripts/adapters/claude-wake.sh /path/to/repo
+CLAUDE_SESSION_ID=<session-id> sh scripts/adapters/claude-wake.sh /path/to/repo frontend
 ```
 
-This runs `claude -p --resume "$CLAUDE_SESSION_ID"` only after `inbox` reports mail. Resume works after the original session has finished, not while it is still running.
+`frontend` is the participant name. This runs `claude -p --resume "$CLAUDE_SESSION_ID"` only after `inbox` reports mail for that name. Resume works after the original session has finished, not while it is still running.
 
 ### ChatGPT desktop
 
-ChatGPT's own scheduled task is the wake-up. Create the task from `scripts/adapters/chatgpt-scheduled-task.md` and attach the local repository. The task runs `inbox --format text` for its participant id. A task without the local project attached cannot see the inbox. The desktop chat window is not what receives the wake-up; the task runs against the attached folder.
+ChatGPT's own scheduled task is the wake-up. Create the task from `scripts/adapters/chatgpt-scheduled-task.md` and attach the local repository. The task runs `inbox --format text` for the participant's own name. A task without the local project attached cannot see the inbox. The desktop chat window is not what receives the wake-up; the task runs against the attached folder.
 
 ## Automatic Wake-Up With `collab.py watch`
 
@@ -99,20 +99,22 @@ AI coding tools cannot be pushed awake while idle, but most of them ship a non-i
 Generate `.ai-collab/wake.json` and adjust it to the tools and permissions you trust:
 
 ```bash
-python scripts/collab.py init-wake --root . --agents cursor codex claude-code
+python scripts/collab.py init-wake --root . \
+  --bind lead=cursor --bind frontend=claude-code --bind backend=codex
 ```
 
 ```json
 {
   "timeout": 1800,
   "agents": {
-    "claude-code": {"command": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits", "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep"]},
-    "codex": {"command": ["codex", "exec", "--sandbox", "workspace-write", "--ask-for-approval", "never", "{prompt}"]},
-    "cursor": {"command": ["agent", "-p", "--force", "{prompt}"]},
-    "human": {"notify_only": true, "command": ["notify-send", "Collaboration", "{thread_id} needs you: {document}"]}
+    "lead": {"tool": "cursor", "command": ["agent", "-p", "--force", "{prompt}"]},
+    "frontend": {"tool": "claude-code", "command": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits", "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep"]},
+    "backend": {"tool": "codex", "command": ["codex", "exec", "--sandbox", "workspace-write", "--ask-for-approval", "never", "{prompt}"]}
   }
 }
 ```
+
+The `tool` field is the only place a product name is required. `lead` can be the coordinator: the wake prompt then forbids product-code edits. Every wake prompt forbids `git commit` and `git push` unless the human explicitly requested that commit.
 
 | Tool | Non-interactive command |
 | --- | --- |
@@ -156,10 +158,10 @@ With `--thread-id`, exit code `0` means the thread finished or was stopped, and 
 Run one watcher per machine, restricted to the agents installed there, and share the thread through Git:
 
 ```bash
-python scripts/collab.py watch --root . --thread-id config-redesign --agents codex --git-sync
+python scripts/collab.py watch --root . --thread-id config-redesign --agents backend --git-sync
 ```
 
-`--git-sync` commits and pushes local changes under `.ai-collab/threads/` before each scan, pulls with rebase, and pushes again after every processed signal. Business-code changes made by agents are not committed by the watcher.
+`--agents` filters by participant name. Only a human may pass `--git-sync`. It commits and pushes `.ai-collab/threads/` before each scan, pulls with rebase, and pushes again after every processed signal. It does not commit product code. A participant must not enable it, and must not run `git commit` or `git push` unless the human explicitly requested that commit.
 
 ## Wake-Up Boundaries
 

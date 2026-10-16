@@ -279,20 +279,32 @@ class WatchTest(unittest.TestCase):
         }
         (self.root / ".ai-collab/wake.json").write_text(json.dumps(config), encoding="utf-8")
         self.watch("--once")
-        self.assertEqual(
-            capture.read_text(encoding="utf-8"),
-            f"agent=codex thread={THREAD} literal={{unknown}}",
-        )
+        captured = capture.read_text(encoding="utf-8")
+        self.assertIn(f"agent=codex thread={THREAD} literal={{unknown}}", captured)
+        self.assertIn("Do not run git commit or git push", captured)
 
     def test_init_wake_writes_known_commands(self):
         result = self.run_json(
-            "init-wake", "--root", str(self.root), "--agents", "cursor", "claude-code", "aider"
+            "init-wake",
+            "--root",
+            str(self.root),
+            "--bind",
+            "lead=cursor",
+            "--bind",
+            "frontend=claude-code",
+            "--bind",
+            "backend=aider",
         )
-        self.assertEqual(result["unconfigured_agents"], ["aider"])
+        self.assertEqual(result["unconfigured_agents"], ["backend"])
         config = json.loads((self.root / ".ai-collab/wake.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["agents"]["cursor"]["command"][:3], ["agent", "-p", "--force"])
-        self.assertEqual(config["agents"]["claude-code"]["command"][0], "claude")
-        self.run_json("init-wake", "--root", str(self.root), "--agents", "codex", expected=2)
+        self.assertEqual(config["agents"]["lead"]["tool"], "cursor")
+        self.assertEqual(config["agents"]["lead"]["command"][:3], ["agent", "-p", "--force"])
+        self.assertEqual(config["agents"]["frontend"]["tool"], "claude-code")
+        self.assertEqual(config["agents"]["frontend"]["command"][0], "claude")
+        self.assertNotIn("cursor", config["agents"])
+        self.run_json(
+            "init-wake", "--root", str(self.root), "--bind", "lead=codex", expected=2
+        )
 
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_git_sync_pushes_each_processed_turn(self):

@@ -131,7 +131,7 @@ class InboxTest(unittest.TestCase):
         env["COLLAB_ONCE"] = "1"
         env["CURSOR_CHAT_ID"] = "chat-123"
         completed = subprocess.run(
-            ["sh", str(ADAPTERS / "cursor-wake.sh"), str(self.root)],
+            ["sh", str(ADAPTERS / "cursor-wake.sh"), str(self.root), "cursor"],
             text=True,
             capture_output=True,
             check=False,
@@ -162,7 +162,7 @@ class InboxTest(unittest.TestCase):
         env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
         env["COLLAB_ONCE"] = "1"
         completed = subprocess.run(
-            ["sh", str(ADAPTERS / "claude-wake.sh"), str(self.root)],
+            ["sh", str(ADAPTERS / "claude-wake.sh"), str(self.root), "claude-code"],
             text=True,
             capture_output=True,
             check=False,
@@ -170,6 +170,49 @@ class InboxTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
         self.assertFalse(capture.exists())
+
+    def test_coordinator_may_not_edit_code_and_nobody_may_commit(self):
+        self.publish_turn()
+        coordinator = json.loads(
+            self.run_cli("inbox", "--root", str(self.root), "--agent", "cursor").stdout
+        )
+        item = coordinator["items"][0]
+        self.assertTrue(item["is_coordinator"])
+        self.assertFalse(item["may_edit_code"])
+        self.assertFalse(item["may_commit"])
+        prompt = self.run_cli(
+            "inbox", "--root", str(self.root), "--agent", "cursor", "--format", "prompt"
+        ).stdout
+        self.assertIn("Do not create, modify, or delete product code", prompt)
+        self.assertIn("Do not run git commit or git push", prompt)
+
+        created = json.loads(
+            self.run_cli(
+                "new-turn", "--root", str(self.root), "--thread-id", THREAD,
+                "--author", "cursor", "--role", "coordinator", "--kind", "DISCUSSION",
+                "--status", "OPEN", "--requested-action", "IMPLEMENT", "--title", "Assign",
+            ).stdout
+        )
+        document = self.root / created["document"]
+        document.write_text(
+            document.read_text(encoding="utf-8").replace("TODO(agent-collaboration):", "Done:"),
+            encoding="utf-8",
+        )
+        self.run_cli(
+            "publish", "--root", str(self.root), "--thread-id", THREAD,
+            "--agent", "cursor", "--to", "codex", "--document", created["document"],
+        )
+        worker = json.loads(
+            self.run_cli("inbox", "--root", str(self.root), "--agent", "codex").stdout
+        )
+        self.assertFalse(worker["items"][0]["is_coordinator"])
+        self.assertTrue(worker["items"][0]["may_edit_code"])
+        self.assertFalse(worker["items"][0]["may_commit"])
+        worker_prompt = self.run_cli(
+            "inbox", "--root", str(self.root), "--agent", "codex", "--format", "prompt"
+        ).stdout
+        self.assertNotIn("You are the coordinator of this thread", worker_prompt)
+        self.assertIn("Do not run git commit or git push", worker_prompt)
 
 
 if __name__ == "__main__":

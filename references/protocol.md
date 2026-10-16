@@ -27,7 +27,9 @@ Store protocol data under the repository root:
 
 ## Identifiers
 
-Use lowercase ASCII letters, digits, dots, underscores, and hyphens for thread and agent IDs. Keep IDs stable across tools. Do not place credentials, email addresses, or machine-specific paths in identifiers.
+Use lowercase ASCII letters, digits, dots, underscores, and hyphens for thread and participant IDs. A human chooses the names, and the names are not tool names. Keep them stable for the life of the thread. Do not place credentials, email addresses, or machine-specific paths in identifiers.
+
+Record which tool runs a participant only where a wake command needs it, such as `lead=cursor` in the wake config. The protocol artifacts themselves do not name Cursor, Claude Code, or ChatGPT.
 
 Use UUIDs for signal `message_id` values. Use an integer round that increases for every new turn in a thread.
 
@@ -93,6 +95,18 @@ Use roles as responsibilities, not product names:
 - `verifier`
 
 An agent may change role in a later turn. State the role in every turn.
+
+The participant named `coordinator` in the thread manifest is the special coordinating participant. That participant may read the repository and may write only:
+
+- turns they author;
+- signals the protocol tells them to publish;
+- their own state file.
+
+They must not create, modify, or delete product code, configuration, or tests, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. No file setting can grant the coordinator permission to edit product code.
+
+## Commits
+
+No participant may run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Writing a turn or signal is not a commit. `IMPLEMENT`, `REVIEW`, and the other requested actions do not authorize a commit. A human may start `collab.py watch --git-sync` themselves; a participant must not add that flag or commit on the watcher's behalf. `--git-sync` publishes files under `.ai-collab/threads/` only.
 
 ## Processing Algorithm
 

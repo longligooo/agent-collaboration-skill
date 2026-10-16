@@ -1,14 +1,18 @@
 #!/bin/sh
-# Poll this agent's inbox and wake the Cursor conversation when mail is waiting.
-# The query is always `collab.py inbox`. Set CURSOR_CHAT_ID to resume that chat.
-# Usage, from the target repository: sh /path/to/scripts/adapters/cursor-wake.sh
+# Poll one participant's inbox and wake it with the Cursor CLI.
+# The participant name is theirs, not the tool name. Set CURSOR_CHAT_ID to resume that chat.
+# Usage: sh cursor-wake.sh <repo> <participant>
 set -eu
 
-AGENT=cursor
 INTERVAL="${COLLAB_INTERVAL:-30}"
 CHAT_ID="${CURSOR_CHAT_ID:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ROOT=$(CDPATH= cd -- "${1:-.}" && pwd)
+AGENT=${2:-${COLLAB_AGENT:-}}
+if [ -z "$AGENT" ]; then
+  printf '%s\n' "usage: cursor-wake.sh <repo> <participant>" >&2
+  exit 2
+fi
 
 wake() {
   prompt=$1

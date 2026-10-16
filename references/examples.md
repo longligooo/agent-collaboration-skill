@@ -2,14 +2,14 @@
 
 ## Design Discussion
 
-1. Cursor publishes a `PROPOSAL` requesting `CHALLENGE` from Claude Code.
-2. Claude Code inspects current architecture and publishes a `CHALLENGE` requesting `REVISION`.
-3. Cursor publishes a `REVISION` requesting `REVIEW` from Codex.
-4. Codex verifies the revised constraints and publishes a `DECISION` with `AGREED`.
+1. `lead`, the coordinator, publishes a `PROPOSAL` requesting `CHALLENGE` from `frontend`. `lead` does not edit product code.
+2. `frontend` inspects the current architecture and publishes a `CHALLENGE` requesting `REVISION`.
+3. `lead` publishes a `REVISION` requesting `REVIEW` from `backend`.
+4. `backend` verifies the revised constraints and publishes a `DECISION` with `AGREED`. None of them commit unless the human explicitly asked for a commit.
 
 ## Implementation And Review
 
-1. An implementer publishes an `IMPLEMENTATION` turn with commit IDs and tests, requesting `REVIEW`.
+1. An implementer publishes an `IMPLEMENTATION` turn with the changed files and tests, requesting `REVIEW`. The turn does not include a commit unless the human explicitly requested one.
 2. A reviewer publishes a `REVIEW` with stable `P0`, `P1`, and `P2` finding IDs.
 3. The implementer publishes another `IMPLEMENTATION`, retaining every prior finding ID and its claimed disposition.
 4. The reviewer re-runs targeted evidence and publishes `VERIFICATION` or another `REVIEW`.

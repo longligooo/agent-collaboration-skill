@@ -659,6 +659,7 @@ def inbox_report(root: Path, agent: str, thread_id: Optional[str] = None) -> Dic
                 "document": message.get("document"),
                 "created_at": message.get("created_at"),
                 "error": result.get("error"),
+                **participant_policy(root, result["thread_id"], agent),
             }
         )
     rank = {"NEW": 0, "TERMINAL": 1, "INVALID": 2}
@@ -669,6 +670,34 @@ def inbox_report(root: Path, agent: str, thread_id: Optional[str] = None) -> Dic
         "count": len(items),
         "items": items,
     }
+
+
+def participant_policy(root: Path, thread_id: str, agent: str) -> Dict[str, Any]:
+    """The coordinator never edits product code. Nobody may commit unless a human says so."""
+    try:
+        is_coordinator = load_manifest(root, thread_id).get("coordinator") == agent
+    except CollaborationError:
+        is_coordinator = False
+    return {
+        "is_coordinator": is_coordinator,
+        "may_edit_code": not is_coordinator,
+        "may_commit": False,
+    }
+
+
+def policy_suffix(root: Path, thread_id: str, agent: str) -> str:
+    policy = participant_policy(root, thread_id, agent)
+    lines = [
+        "Do not run git commit or git push. Commit or push only when the human "
+        "explicitly requested that commit in the current instruction."
+    ]
+    if policy["is_coordinator"]:
+        lines.append(
+            "You are the coordinator of this thread. Do not create, modify, or delete "
+            "product code, configuration, or tests. Write only your collaboration turn, "
+            "the recipient signal, and your own state file. Assign work and check the results."
+        )
+    return "\n" + "\n".join(lines)
 
 
 def attention_prompt(root: Path, report: Dict[str, Any]) -> str:
@@ -698,6 +727,7 @@ def attention_prompt(root: Path, report: Dict[str, Any]) -> str:
             f"\n\nThe signal is INVALID: {item.get('error')}. "
             "Do not publish a turn. Report the error to the coordinator, then exit."
         )
+    prompt += policy_suffix(root, item.get("thread_id") or "", report["agent"])
     return prompt
 
 
@@ -713,7 +743,8 @@ def render_inbox_text(report: Dict[str, Any]) -> str:
             continue
         lines.append(
             "- {decision} thread={thread_id} round={round} from={sender} "
-            "action={requested_action} message={message_id} document={document}".format(
+            "action={requested_action} message={message_id} document={document} "
+            "coordinator={coordinator} may_edit_code={may_edit_code} may_commit=no".format(
                 decision=item["decision"],
                 thread_id=item["thread_id"],
                 round=item["round"],
@@ -721,6 +752,8 @@ def render_inbox_text(report: Dict[str, Any]) -> str:
                 requested_action=item["requested_action"],
                 message_id=item["message_id"],
                 document=item["document"],
+                coordinator="yes" if item.get("is_coordinator") else "no",
+                may_edit_code="yes" if item.get("may_edit_code") else "no",
             )
         )
     return "\n".join(lines) + "\n"
@@ -1070,6 +1103,7 @@ class Watcher:
             "python": sys.executable,
         }
         prompt = render_template(self.config.get("prompt") or DEFAULT_WAKE_PROMPT, values)
+        prompt += policy_suffix(self.root, item["thread_id"], agent)
         command = [render_template(part, {**values, "prompt": prompt}) for part in spec["command"]]
         command[0] = shutil.which(command[0]) or command[0]
         environment = dict(os.environ)
@@ -1268,17 +1302,28 @@ def cmd_init_wake(args: argparse.Namespace) -> None:
     if target.exists() and not args.force:
         raise CollaborationError(f"wake config already exists: {target}; pass --force to replace it")
     agents: Dict[str, Any] = {}
-    for raw in args.agents:
-        agent = validate_id(raw, "agent")
-        agents[agent] = DEFAULT_WAKE_AGENTS.get(
-            agent, {"command": [f"REPLACE-WITH-{agent}-CLI", "{prompt}"]}
-        )
+    unconfigured: List[str] = []
+    for raw in args.bind:
+        if raw.count("=") != 1:
+            raise CollaborationError("--bind must be participant=tool, for example lead=cursor")
+        participant, tool = raw.split("=", 1)
+        participant = validate_id(participant, "participant")
+        tool = validate_id(tool, "tool")
+        if participant in agents:
+            raise CollaborationError(f"participant {participant!r} is bound more than once")
+        known = DEFAULT_WAKE_AGENTS.get(tool)
+        if known is None:
+            unconfigured.append(participant)
+            command = [f"REPLACE-WITH-{tool}-CLI", "{prompt}"]
+        else:
+            command = list(known["command"])
+        agents[participant] = {"tool": tool, "command": command}
     atomic_write_json(target, {"timeout": 1800, "agents": agents})
     emit(
         {
             "result": "CREATED",
             "config": str(target),
-            "unconfigured_agents": [a for a in agents if a not in DEFAULT_WAKE_AGENTS],
+            "unconfigured_agents": unconfigured,
         }
     )
 
@@ -1361,7 +1406,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wake_parser.add_argument("--root", default=".")
     wake_parser.add_argument("--config", help=f"default: {WAKE_CONFIG_PATH}")
-    wake_parser.add_argument("--agents", nargs="+", required=True)
+    wake_parser.add_argument(
+        "--bind",
+        action="append",
+        required=True,
+        help="participant=tool, for example lead=cursor. The name is not a tool.",
+    )
     wake_parser.add_argument("--force", action="store_true")
     wake_parser.set_defaults(handler=cmd_init_wake)
 

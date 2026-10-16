@@ -95,8 +95,8 @@ python /path/to/agent-collaboration/scripts/collab.py init \
   --thread-id config-redesign \
   --topic "Configuration redesign" \
   --objective "Agree on and verify the migration plan" \
-  --coordinator cursor \
-  --participants cursor codex claude-code
+  --coordinator lead \
+  --participants lead frontend backend
 ```
 
 Create the first immutable turn template:
@@ -105,7 +105,7 @@ Create the first immutable turn template:
 python /path/to/agent-collaboration/scripts/collab.py new-turn \
   --root . \
   --thread-id config-redesign \
-  --author cursor \
+  --author lead \
   --role proposer \
   --kind PROPOSAL \
   --status OPEN \
@@ -119,9 +119,9 @@ Complete the generated Markdown file, then publish it:
 python /path/to/agent-collaboration/scripts/collab.py publish \
   --root . \
   --thread-id config-redesign \
-  --agent cursor \
-  --to codex \
-  --document .ai-collab/threads/config-redesign/turns/round-0001-from-cursor-proposal.md
+  --agent lead \
+  --to frontend \
+  --document .ai-collab/threads/config-redesign/turns/round-0001-from-lead-proposal.md
 ```
 
 The recipient inspects its inbox with:
@@ -129,7 +129,7 @@ The recipient inspects its inbox with:
 ```bash
 python /path/to/agent-collaboration/scripts/collab.py inspect \
   --root . \
-  --agent codex
+  --agent frontend
 ```
 
 Only a `NEW` decision should create a response. `EMPTY`, `DUPLICATE`, and
@@ -148,7 +148,7 @@ round until an agent publishes `AGREED`, `CLOSED`, or `CANCELLED`.
 ```bash
 # once per repository: choose the wake command for each participant
 python /path/to/agent-collaboration/scripts/collab.py init-wake \
-  --root . --agents cursor codex claude-code
+  --root . --bind lead=cursor --bind frontend=claude-code --bind backend=codex
 
 # open the thread and publish the first turn (manually or by asking any agent),
 # then let the watcher drive the remaining rounds
@@ -159,7 +159,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 The watcher stops when the thread is finished, when a `STOP` file appears,
 or when a round, wake, or retry limit is reached. Agent output is written to
 `.ai-collab/logs/`. Participants on different machines can share a thread
-through Git with `--agents <local-agents> --git-sync`. Review the generated
+through Git with `--agents backend --git-sync`. `--git-sync` publishes `.ai-collab/threads/` only, and only a human may turn it on. Participants do not commit product code unless the human explicitly asks. Review the generated
 `.ai-collab/wake.json` permissions before running unattended. See
 [Tool Adapters](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)
 for the configuration format and safety limits.

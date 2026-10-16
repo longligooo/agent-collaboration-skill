@@ -24,6 +24,9 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - Keep each agent's processed-message state separate. Do not rely on conversation memory for idempotency.
 - Stop on duplicate, invalid, mismatched, or stale signals without writing files.
 - Let a human instruction override the protocol and record that override in the next turn when collaboration continues.
+- Participant ids are names the human chooses. Do not treat `cursor`, `claude`, or `gpt` as identities. Record which tool runs a participant only in that participant's wake command.
+- The manifest coordinator coordinates only. That participant must not create, modify, or delete product code, configuration, or tests. They may write their own turns, signals, and state file.
+- Do not run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Publishing a turn is not a commit.
 
 ## Choose The Collaboration Action
 
@@ -52,9 +55,11 @@ python scripts/collab.py init \
   --thread-id config-redesign \
   --topic "Configuration redesign" \
   --objective "Agree on and verify the configuration migration plan" \
-  --coordinator cursor \
-  --participants cursor codex claude-code
+  --coordinator lead \
+  --participants lead frontend backend
 ```
+
+`lead`, `frontend`, and `backend` are ordinary names. Which tool runs each one belongs in the wake binding, for example `lead=cursor` and `frontend=claude-code`.
 
 3. Create the first turn with `new-turn`, fill its evidence and requested outcome, then publish it.
 4. Keep unrelated objectives in separate threads.
@@ -64,10 +69,10 @@ python scripts/collab.py init \
 1. Inspect the inbox:
 
 ```bash
-python scripts/collab.py inspect --root . --agent codex
+python scripts/collab.py inspect --root . --agent frontend
 ```
 
-2. Act only on a `NEW` decision. For `TERMINAL`, follow the terminal action and acknowledge it. For `EMPTY`, `DUPLICATE`, or `INVALID`, do not create a response.
+2. Act only on a `NEW` decision. For `TERMINAL`, follow the terminal action and acknowledge it. For `EMPTY`, `DUPLICATE`, or `INVALID`, do not create a response. If the manifest names you as coordinator, do the coordination in a turn and do not edit product code.
 3. Read the referenced turn and every relevant source artifact. Continue earlier finding IDs until each is explicitly closed, deferred with owner and reason, or still open.
 4. Perform the requested action at the evidence level appropriate to the risk. Separate observations, inferences, and unverified claims.
 5. Create a new turn. Use `based_on` to identify the exact inputs and include commands, results, diffs, or file references that support the conclusion.
@@ -77,9 +82,9 @@ python scripts/collab.py inspect --root . --agent codex
 python scripts/collab.py publish \
   --root . \
   --thread-id config-redesign \
-  --agent codex \
-  --to cursor \
-  --document .ai-collab/threads/config-redesign/turns/round-0002-from-codex-challenge.md \
+  --agent frontend \
+  --to lead \
+  --document .ai-collab/threads/config-redesign/turns/round-0002-from-frontend-challenge.md \
   --requested-action REVISE \
   --in-message-id 550e8400-e29b-41d4-a716-446655440000
 ```
@@ -92,12 +97,12 @@ Generate a non-overwriting template:
 python scripts/collab.py new-turn \
   --root . \
   --thread-id config-redesign \
-  --author codex \
+  --author frontend \
   --role challenger \
   --kind CHALLENGE \
   --status NEEDS_CHANGES \
   --requested-action REVISE \
-  --based-on .ai-collab/threads/config-redesign/turns/round-0001-from-cursor-proposal.md \
+  --based-on .ai-collab/threads/config-redesign/turns/round-0001-from-lead-proposal.md \
   --title "Configuration redesign challenge"
 ```
 
@@ -116,7 +121,7 @@ Fill the generated sections before publishing. Use stable finding IDs such as `P
 python scripts/collab.py acknowledge \
   --root . \
   --thread-id config-redesign \
-  --agent codex \
+  --agent frontend \
   --message-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
@@ -125,18 +130,16 @@ python scripts/collab.py acknowledge \
 Every scheduler, background script, and scheduled task decides whether to wake you by running this command and no other query:
 
 ```bash
-python scripts/collab.py inbox --root . --agent cursor --format text
+python scripts/collab.py inbox --root . --agent frontend --format text
 ```
 
-Exit `0` means a `NEW`, `TERMINAL`, or `INVALID` signal is waiting. Exit `1` means there is nothing to do; do not write files. Exit `2` means the command itself failed. `--format json` prints the same report for a program. `--format prompt` prints the one-cycle instruction a wake script passes into the conversation. `--agent` defaults to `COLLAB_AGENT`.
+Exit `0` means a `NEW`, `TERMINAL`, or `INVALID` signal is waiting. Exit `1` means there is nothing to do; do not write files. Exit `2` means the command itself failed. `--format json` prints the same report for a program, including `is_coordinator`, `may_edit_code`, and `may_commit`. `--format prompt` prints the one-cycle instruction a wake script passes into the conversation. `--agent` is the participant's own name and defaults to `COLLAB_AGENT`.
 
-Use the participant id recorded in the thread. A ChatGPT desktop participant registered as `chatgpt` must pass `--agent chatgpt`.
+The ready-made callers take that name as an argument. The script selects the tool; the argument selects the person:
 
-The ready-made callers are:
-
-- Cursor background script: `sh scripts/adapters/cursor-wake.sh /path/to/repo`. Set `CURSOR_CHAT_ID` to resume that desktop or CLI chat.
-- Claude Code background script: `sh scripts/adapters/claude-wake.sh /path/to/repo`. Set `CLAUDE_SESSION_ID` to resume that session.
-- ChatGPT scheduled task: create the task from `scripts/adapters/chatgpt-scheduled-task.md`, with this repository attached as a local project.
+- Cursor tool: `sh scripts/adapters/cursor-wake.sh /path/to/repo lead`. Set `CURSOR_CHAT_ID` to resume that chat.
+- Claude Code tool: `sh scripts/adapters/claude-wake.sh /path/to/repo frontend`. Set `CLAUDE_SESSION_ID` to resume that session.
+- ChatGPT scheduled task: create the task from `scripts/adapters/chatgpt-scheduled-task.md`, with this repository attached as a local project. Put the participant's name in the task, not the product name.
 
 Ask the user to leave the computer awake. A background script stops when `.ai-collab/STOP` exists. Do not create a second scheduler for an agent that already has one. When one of these callers starts you, handle the single listed message and exit.
 
@@ -150,7 +153,8 @@ When a user asks for automatic collaboration:
 2. Ensure `.ai-collab/wake.json` lists every automated participant:
 
 ```bash
-python scripts/collab.py init-wake --root . --agents cursor codex claude-code
+python scripts/collab.py init-wake --root . \
+  --bind lead=cursor --bind frontend=claude-code --bind backend=codex
 ```
 
 3. Start the watcher in a terminal that outlives your session, for example `tmux` or `nohup`, or ask the user to run it:

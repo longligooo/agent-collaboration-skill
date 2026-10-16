@@ -1,14 +1,18 @@
 #!/bin/sh
-# Poll this agent's inbox and wake the Claude Code conversation when mail is waiting.
-# The query is always `collab.py inbox`. Set CLAUDE_SESSION_ID to resume that session.
-# Usage, from the target repository: sh /path/to/scripts/adapters/claude-wake.sh
+# Poll one participant's inbox and wake it with the Claude Code CLI.
+# The participant name is theirs, not the tool name. Set CLAUDE_SESSION_ID to resume that session.
+# Usage: sh claude-wake.sh <repo> <participant>
 set -eu
 
-AGENT=claude-code
 INTERVAL="${COLLAB_INTERVAL:-30}"
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ROOT=$(CDPATH= cd -- "${1:-.}" && pwd)
+AGENT=${2:-${COLLAB_AGENT:-}}
+if [ -z "$AGENT" ]; then
+  printf '%s\n' "usage: claude-wake.sh <repo> <participant>" >&2
+  exit 2
+fi
 
 wake() {
   prompt=$1
