@@ -27,7 +27,9 @@ Store protocol data under the repository root:
 
 ## Identifiers
 
-Use lowercase ASCII letters, digits, dots, underscores, and hyphens for thread and agent IDs. Keep IDs stable across tools. Do not place credentials, email addresses, or machine-specific paths in identifiers.
+Use lowercase ASCII letters, digits, dots, underscores, and hyphens for thread and participant IDs. A human chooses the names, and the names are not tool names. Keep them stable for the life of the thread. Do not place credentials, email addresses, or machine-specific paths in identifiers.
+
+Record which tool runs a participant only where a wake command needs it, such as `lead=cursor` in the wake config. The protocol artifacts themselves do not name Cursor, Claude Code, or ChatGPT.
 
 Use UUIDs for signal `message_id` values. Use an integer round that increases for every new turn in a thread.
 
@@ -94,6 +96,20 @@ Use roles as responsibilities, not product names:
 
 An agent may change role in a later turn. State the role in every turn.
 
+`coordinator` in the thread manifest is optional. Set it only when the human explicitly names one participant. `null` and an absent field both mean there is no coordinator, and then no participant is barred from editing product code.
+
+When the human does name one, that participant may read the repository and may write only:
+
+- turns they author;
+- signals the protocol tells them to publish;
+- their own state file.
+
+They must not create, modify, or delete product code, configuration, or test files, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. Checking includes running the project's existing tests and recording the commands and results. Running tests does not allow the coordinator to edit those tests or any other product file, and it does not allow any participant to commit. No file setting can grant the coordinator permission to edit product code.
+
+## Commits
+
+No participant may run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Writing a turn or signal is not a commit. `IMPLEMENT`, `REVIEW`, and the other requested actions do not authorize a commit. A human may start `collab.py watch --git-sync` themselves; a participant must not add that flag or commit on the watcher's behalf. `--git-sync` publishes files under `.ai-collab/threads/` only.
+
 ## Processing Algorithm
 
 For each invocation:
@@ -141,7 +157,7 @@ Never publish a signal pointing at a missing or invalid turn.
 
 ## Concurrency
 
-A thread has one ordered round sequence. Do not let multiple agents allocate the same next round concurrently. The coordinator must either serialize those turns or create branch thread IDs such as `api-design-security` and `api-design-performance`.
+A thread has one ordered round sequence. Do not let multiple agents allocate the same next round concurrently. When a coordinator is designated, that participant serializes those turns or creates branch thread IDs such as `api-design-security` and `api-design-performance`. With no coordinator, the participants still must not reuse a round number.
 
 Fixed per-recipient signal files intentionally keep only the latest notification. Use a separate thread when every parallel event must be preserved.
 
@@ -161,7 +177,7 @@ Each participant may clean up only its own temporary signals, state, hooks, watc
 
 ## Human Control
 
-A human may pause, redirect, close, or cancel a thread at any time. Stop automated activity immediately when instructed. When collaboration resumes, record the changed scope in a new turn rather than rewriting history.
+A human may pause, redirect, close, or cancel a thread at any time. Stop automated activity immediately when instructed. Creating `.ai-collab/STOP` or `.ai-collab/threads/<thread-id>/STOP` halts `collab.py watch` before it wakes another agent. When collaboration resumes, record the changed scope in a new turn rather than rewriting history.
 
 ## Security
 
