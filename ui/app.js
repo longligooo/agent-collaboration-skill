@@ -43,6 +43,54 @@ function formatTime(value) {
   }).format(date);
 }
 
+const STATUS_LABELS = {
+  OPEN: "进行中",
+  NEEDS_INPUT: "待决定",
+  NEEDS_CHANGES: "待修改",
+  NO_BLOCKING_FINDINGS: "无阻塞",
+  READY: "就绪",
+  AGREED: "已同意",
+  EXECUTING: "实施中",
+  VERIFYING: "核实中",
+  CLOSED: "已关闭",
+  CANCELLED: "已取消",
+  NONE: "未开始",
+};
+
+function statusClass(status) {
+  const known = {
+    OPEN: "status-open",
+    NEEDS_INPUT: "status-needs-input",
+    NEEDS_CHANGES: "status-needs-changes",
+    NO_BLOCKING_FINDINGS: "status-clear",
+    READY: "status-ready",
+    AGREED: "status-agreed",
+    EXECUTING: "status-executing",
+    VERIFYING: "status-verifying",
+    CLOSED: "status-closed",
+    CANCELLED: "status-cancelled",
+    NONE: "status-none",
+  };
+  return known[status] || "status-none";
+}
+
+function statusPill(status) {
+  const value = status || "NONE";
+  return h("span", { class: `pill ${statusClass(value)}`, title: value }, STATUS_LABELS[value] || value);
+}
+
+function collaboratorPills(thread) {
+  const coordinator = typeof thread.coordinator === "string" ? thread.coordinator : "";
+  const names = [];
+  if (coordinator) names.push(coordinator);
+  for (const name of thread.participants || []) {
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names.map((name) =>
+    h("span", { class: name === coordinator ? "pill info" : "pill" }, name === coordinator ? `协调者 ${name}` : name),
+  );
+}
+
 function decisionClass(decision) {
   if (decision === "NEW") return "attention";
   if (decision === "TERMINAL") return "info";
@@ -206,9 +254,9 @@ function threadCards(threads) {
         h(
           "div",
           { class: "pills" },
-          h("span", { class: "pill" }, thread.status),
+          statusPill(thread.status),
           h("span", { class: "pill" }, `第 ${thread.round || 0} 轮`),
-          thread.coordinator ? h("span", { class: "pill info" }, `协调者 ${thread.coordinator}`) : null,
+          ...collaboratorPills(thread),
           thread.signals.some((signal) => signal.decision === "NEW")
             ? h("span", { class: "pill attention" }, "有待处理")
             : null,
@@ -229,13 +277,9 @@ function renderThread(projectId, threadId) {
       "div",
       { class: "pills" },
       h("span", { class: "pill" }, thread.project_name),
-      h("span", { class: "pill" }, thread.status),
-          thread.coordinator
-            ? h("span", { class: "pill info" }, `协调者 ${thread.coordinator}`)
-            : h("span", { class: "pill" }, "未指定协调者"),
-          ...thread.participants
-            .filter((name) => name !== thread.coordinator)
-            .map((name) => h("span", { class: "pill" }, name)),
+      statusPill(thread.status),
+      thread.coordinator ? null : h("span", { class: "pill" }, "未指定协调者"),
+      ...collaboratorPills(thread),
     ),
     thread.signals.length
       ? h("section", {}, h("h2", { class: "section-title" }, "收件"), h("div", { class: "stack" }, thread.signals.map(signalCard)))
@@ -281,7 +325,7 @@ function turnList(turns) {
           h("span", { class: "pill" }, `第 ${turn.round} 轮`),
           h("span", { class: "pill" }, turn.author),
           h("span", { class: "pill" }, turn.kind),
-          h("span", { class: "pill" }, turn.status),
+          statusPill(turn.status),
           turn.requested_action ? h("span", { class: "pill" }, turn.requested_action) : null,
         ),
         turn.summary ? h("p", { class: "summary" }, turn.summary) : null,
@@ -347,8 +391,8 @@ function renderPerson(id) {
           h(
             "div",
             { class: "pills" },
-            h("span", { class: "pill" }, thread.status),
-            thread.coordinator ? h("span", { class: "pill info" }, "协调者") : null,
+            statusPill(thread.status),
+            ...collaboratorPills(thread),
             thread.pending ? h("span", { class: "pill attention" }, `${thread.pending} 条待处理`) : null,
           ),
         ),

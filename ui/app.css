@@ -218,6 +218,17 @@ h1 {
 .pill.ok { color: var(--ok); border-color: rgba(143, 206, 174, 0.4); }
 .pill.info { color: var(--info); border-color: rgba(169, 192, 220, 0.4); }
 .pill.danger { color: var(--danger); border-color: rgba(224, 154, 150, 0.45); }
+.pill.status-open { color: #9eb6d6; border-color: rgba(158, 182, 214, 0.5); }
+.pill.status-executing { color: #6ec4c0; border-color: rgba(110, 196, 192, 0.5); }
+.pill.status-verifying { color: #d2b56a; border-color: rgba(210, 181, 106, 0.5); }
+.pill.status-needs-input { color: #e4a15f; border-color: rgba(228, 161, 95, 0.55); }
+.pill.status-needs-changes { color: #e08a6a; border-color: rgba(224, 138, 106, 0.55); }
+.pill.status-clear { color: #a8c46a; border-color: rgba(168, 196, 106, 0.5); }
+.pill.status-ready { color: #8fceae; border-color: rgba(143, 206, 174, 0.5); }
+.pill.status-agreed { color: #5eae86; border-color: rgba(94, 174, 134, 0.55); }
+.pill.status-closed { color: #9a9a9a; border-color: rgba(255, 255, 255, 0.18); }
+.pill.status-cancelled { color: #d07a90; border-color: rgba(208, 122, 144, 0.5); }
+.pill.status-none { color: #737373; border-color: rgba(255, 255, 255, 0.12); }
 
 .stack { display: flex; flex-direction: column; gap: 10px; }
 
