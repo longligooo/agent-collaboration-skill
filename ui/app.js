@@ -43,6 +43,31 @@ function formatTime(value) {
   }).format(date);
 }
 
+function formatDuration(start, end) {
+  const from = new Date(start).getTime();
+  const to = end ? new Date(end).getTime() : Date.now();
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return "";
+  const total = Math.floor((to - from) / 60000);
+  if (total < 1) return "不到 1 分钟";
+  const days = Math.floor(total / 1440);
+  const hours = Math.floor((total % 1440) / 60);
+  const minutes = total % 60;
+  const parts = [];
+  if (days) parts.push(`${days} 天`);
+  if (hours) parts.push(`${hours} 小时`);
+  if (minutes && !days) parts.push(`${minutes} 分钟`);
+  return parts.join(" ") || `${minutes} 分钟`;
+}
+
+function threadTiming(thread) {
+  if (!thread.started_at) return "";
+  const ended = thread.terminal && thread.updated_at;
+  const duration = formatDuration(thread.started_at, ended ? thread.updated_at : "");
+  const started = `开始 ${formatTime(thread.started_at)}`;
+  if (!duration) return started;
+  return `${started} · ${thread.terminal ? "持续" : "已持续"} ${duration}`;
+}
+
 const STATUS_LABELS = {
   OPEN: "进行中",
   NEEDS_INPUT: "待决定",
@@ -251,6 +276,7 @@ function threadCards(threads) {
           h("span", { class: "meta" }, formatTime(thread.updated_at)),
         ),
         h("div", { class: "quiet" }, `${thread.project_name} · ${thread.thread_id}`),
+        threadTiming(thread) ? h("div", { class: "quiet" }, threadTiming(thread)) : null,
         h(
           "div",
           { class: "pills" },
@@ -388,6 +414,7 @@ function renderPerson(id) {
             h("span", { class: "title" }, thread.topic),
             h("span", { class: "meta" }, formatTime(thread.updated_at)),
           ),
+          threadTiming(thread) ? h("div", { class: "quiet" }, threadTiming(thread)) : null,
           h(
             "div",
             { class: "pills" },
