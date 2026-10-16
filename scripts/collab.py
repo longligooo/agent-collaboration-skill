@@ -1364,7 +1364,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="create an immutable thread manifest")
     init_parser.add_argument("--root", default=".")
     init_parser.add_argument("--thread-id", required=True)
-    init_parser.add_argument("--topic", required=True)
+    init_parser.add_argument(
+        "--topic",
+        required=True,
+        help="readable title in the primary language of the conversation",
+    )
     init_parser.add_argument("--objective", required=True)
     init_parser.add_argument(
         "--coordinator",

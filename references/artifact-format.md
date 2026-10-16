@@ -38,7 +38,7 @@ Required fields:
 
 - `protocol_version`
 - `thread_id`
-- `topic`
+- `topic` — readable title in the conversation's primary language, copied from the thread manifest
 - `round`
 - `kind`
 - `author`
