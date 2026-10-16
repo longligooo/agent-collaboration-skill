@@ -2,6 +2,13 @@
 
 These sequences start only after the requirement is already a spec and a ticket. The thread objective names that ticket. See [Tickets](tickets.md).
 
+## New And Known Collaborators
+
+1. The coordinator publishes the dispatch turn for `frontend` and `backend`.
+2. `frontend` has no earlier thread in this repository, so the coordinator writes one opening prompt that tells `frontend` to follow this skill and inspect the new thread.
+3. The human is talking to the coordinator, so the human pastes that prompt into `frontend`'s chat. If the coordinator is a subagent, the agent that started the thread delivers the prompt instead.
+4. `backend` already appears in another thread manifest, so there is no opening prompt. The human tells `backend` that the new thread was assigned to them.
+
 ## Design Discussion
 
 1. `lead`, the coordinator, publishes a `PROPOSAL` requesting `CHALLENGE` from `frontend`. `lead` does not edit product code.
