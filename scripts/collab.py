@@ -629,6 +629,118 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     emit(inspect_inbox(root, args.agent, args.thread_id))
 
 
+ATTENTION_DECISIONS = ("NEW", "TERMINAL", "INVALID")
+INBOX_FORMATS = ("json", "text", "prompt")
+
+
+def resolve_agent_argument(raw: Optional[str]) -> str:
+    agent = raw or os.environ.get("COLLAB_AGENT", "")
+    if not agent:
+        raise CollaborationError("pass --agent or set COLLAB_AGENT")
+    return validate_id(agent, "agent")
+
+
+def inbox_report(root: Path, agent: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+    inbox = inspect_inbox(root, agent, thread_id)
+    items: List[Dict[str, Any]] = []
+    for result in inbox["results"]:
+        if result["decision"] not in ATTENTION_DECISIONS:
+            continue
+        message = result.get("message") or {}
+        items.append(
+            {
+                "decision": result["decision"],
+                "thread_id": result["thread_id"],
+                "message_id": message.get("message_id"),
+                "from": message.get("from"),
+                "round": message.get("round"),
+                "requested_action": message.get("requested_action"),
+                "status": message.get("status"),
+                "document": message.get("document"),
+                "created_at": message.get("created_at"),
+                "error": result.get("error"),
+            }
+        )
+    rank = {"NEW": 0, "TERMINAL": 1, "INVALID": 2}
+    items.sort(key=lambda item: (rank[item["decision"]], item.get("created_at") or ""))
+    return {
+        "agent": agent,
+        "needs_attention": bool(items),
+        "count": len(items),
+        "items": items,
+    }
+
+
+def attention_prompt(root: Path, report: Dict[str, Any]) -> str:
+    item = report["items"][0]
+    prompt = render_template(
+        DEFAULT_WAKE_PROMPT,
+        {
+            "agent": report["agent"],
+            "thread_id": item.get("thread_id") or "",
+            "message_id": item.get("message_id") or "",
+            "document": item.get("document") or "",
+            "requested_action": item.get("requested_action") or "",
+            "decision": item.get("decision") or "",
+            "root": str(root),
+            "skill": str(SKILL_PATH),
+            "script": str(SCRIPT_PATH),
+            "python": sys.executable,
+        },
+    )
+    if report["count"] > 1:
+        prompt += (
+            f"\n\n{report['count'] - 1} other message(s) are also waiting. "
+            "Process only this one, then exit."
+        )
+    if item["decision"] == "INVALID":
+        prompt += (
+            f"\n\nThe signal is INVALID: {item.get('error')}. "
+            "Do not publish a turn. Report the error to the coordinator, then exit."
+        )
+    return prompt
+
+
+def render_inbox_text(report: Dict[str, Any]) -> str:
+    lines = [
+        f"needs_attention: {'yes' if report['needs_attention'] else 'no'}",
+        f"agent: {report['agent']}",
+        f"count: {report['count']}",
+    ]
+    for item in report["items"]:
+        if item["decision"] == "INVALID":
+            lines.append(f"- INVALID thread={item['thread_id']} error={item['error']}")
+            continue
+        lines.append(
+            "- {decision} thread={thread_id} round={round} from={sender} "
+            "action={requested_action} message={message_id} document={document}".format(
+                decision=item["decision"],
+                thread_id=item["thread_id"],
+                round=item["round"],
+                sender=item["from"],
+                requested_action=item["requested_action"],
+                message_id=item["message_id"],
+                document=item["document"],
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    root = repository_root(args.root)
+    agent = resolve_agent_argument(args.agent)
+    if args.format not in INBOX_FORMATS:
+        raise CollaborationError(f"--format must be one of {list(INBOX_FORMATS)}")
+    report = inbox_report(root, agent, args.thread_id)
+    if args.format == "json":
+        emit(report)
+    elif args.format == "text":
+        sys.stdout.write(render_inbox_text(report))
+    elif report["needs_attention"]:
+        print(attention_prompt(root, report))
+    return 0 if report["needs_attention"] else 1
+
+
 def cmd_publish(args: argparse.Namespace) -> None:
     root = repository_root(args.root)
     manifest = load_manifest(root, args.thread_id)
@@ -701,7 +813,7 @@ PENDING_DECISIONS = ("NEW", "TERMINAL")
 PLACEHOLDER_PATTERN = re.compile(r"\{([a-z_]+)\}")
 DEFAULT_WAKE_PROMPT = (
     "You are participant `{agent}` in agent-collaboration thread `{thread_id}` "
-    "(repository root: {root}). The collaboration watcher started you because a "
+    "(repository root: {root}). Your scheduler started you because a "
     "{decision} signal (message {message_id}, requested action {requested_action}, "
     "document {document}) is waiting for you. No human is available to answer "
     "questions during this run. Read {skill} and follow it exactly. Run exactly one "
@@ -1210,6 +1322,21 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--agent", required=True)
     inspect_parser.add_argument("--thread-id")
     inspect_parser.set_defaults(handler=cmd_inspect)
+
+    inbox_parser = subparsers.add_parser(
+        "inbox",
+        help="exit 0 when this agent has a message to handle, otherwise exit 1",
+    )
+    inbox_parser.add_argument("--root", default=".")
+    inbox_parser.add_argument("--agent", help="defaults to COLLAB_AGENT")
+    inbox_parser.add_argument("--thread-id")
+    inbox_parser.add_argument(
+        "--format",
+        default="json",
+        choices=sorted(INBOX_FORMATS),
+        help="json, text, or prompt",
+    )
+    inbox_parser.set_defaults(handler=cmd_inbox)
 
     publish_parser = subparsers.add_parser("publish", help="atomically publish a turn signal")
     publish_parser.add_argument("--root", default=".")

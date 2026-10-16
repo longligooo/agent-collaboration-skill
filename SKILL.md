@@ -120,6 +120,26 @@ python scripts/collab.py acknowledge \
   --message-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
+## Check Whether You Have Mail
+
+Every scheduler, background script, and scheduled task decides whether to wake you by running this command and no other query:
+
+```bash
+python scripts/collab.py inbox --root . --agent cursor --format text
+```
+
+Exit `0` means a `NEW`, `TERMINAL`, or `INVALID` signal is waiting. Exit `1` means there is nothing to do; do not write files. Exit `2` means the command itself failed. `--format json` prints the same report for a program. `--format prompt` prints the one-cycle instruction a wake script passes into the conversation. `--agent` defaults to `COLLAB_AGENT`.
+
+Use the participant id recorded in the thread. A ChatGPT desktop participant registered as `chatgpt` must pass `--agent chatgpt`.
+
+The ready-made callers are:
+
+- Cursor background script: `sh scripts/adapters/cursor-wake.sh /path/to/repo`. Set `CURSOR_CHAT_ID` to resume that desktop or CLI chat.
+- Claude Code background script: `sh scripts/adapters/claude-wake.sh /path/to/repo`. Set `CLAUDE_SESSION_ID` to resume that session.
+- ChatGPT scheduled task: create the task from `scripts/adapters/chatgpt-scheduled-task.md`, with this repository attached as a local project.
+
+Ask the user to leave the computer awake. A background script stops when `.ai-collab/STOP` exists. Do not create a second scheduler for an agent that already has one. When one of these callers starts you, handle the single listed message and exit.
+
 ## Run Rounds Automatically
 
 `scripts/collab.py watch` removes manual forwarding. It scans inboxes and, whenever a `NEW` or `TERMINAL` signal is waiting, starts the recipient's non-interactive CLI (`claude -p`, `codex exec`, `agent -p`, and so on) for one processing cycle. Commands live in `.ai-collab/wake.json`; `init-wake` writes a template.

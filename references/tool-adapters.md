@@ -52,6 +52,46 @@ If the tool has no skill system, provide this repository path in the prompt and 
 - Python 3.9 or later for the optional CLI;
 - a manual, hook-based, or scheduled wake-up mechanism.
 
+## Shared Inbox Query
+
+Cursor, Claude Code, and ChatGPT each wake their own conversation differently. All three call the same query:
+
+```bash
+python scripts/collab.py inbox --root /path/to/repo --agent cursor --format text
+```
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | A `NEW`, `TERMINAL`, or `INVALID` signal is waiting for this agent. |
+| 1 | Nothing to do. Duplicate and empty inboxes exit here. |
+| 2 | The command failed. |
+
+`--format json` is the machine-readable report. `--format prompt` prints the instruction for one processing cycle, and prints nothing when the exit code is 1. Pass `--agent` or set `COLLAB_AGENT`. The id must be the participant id in `thread.json`.
+
+### Cursor
+
+Cursor can keep a background script that resumes a conversation:
+
+```bash
+CURSOR_CHAT_ID=<chat-id> sh scripts/adapters/cursor-wake.sh /path/to/repo
+```
+
+The script calls `inbox --format prompt` and, only when that exits 0, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with the printed prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`.
+
+### Claude Code
+
+Claude Code uses the same pattern:
+
+```bash
+CLAUDE_SESSION_ID=<session-id> sh scripts/adapters/claude-wake.sh /path/to/repo
+```
+
+This runs `claude -p --resume "$CLAUDE_SESSION_ID"` only after `inbox` reports mail. Resume works after the original session has finished, not while it is still running.
+
+### ChatGPT desktop
+
+ChatGPT's own scheduled task is the wake-up. Create the task from `scripts/adapters/chatgpt-scheduled-task.md` and attach the local repository. The task runs `inbox --format text` for its participant id. A task without the local project attached cannot see the inbox. The desktop chat window is not what receives the wake-up; the task runs against the attached folder.
+
 ## Automatic Wake-Up With `collab.py watch`
 
 AI coding tools cannot be pushed awake while idle, but most of them ship a non-interactive mode that runs one prompt and exits. `collab.py watch` uses that mode: it scans every configured agent's inbox and, when a `NEW` or `TERMINAL` signal is waiting, runs that agent's command once with a prompt that names the thread, message, and this skill. The next agent's turn then produces the next signal, so rounds continue without a human forwarding messages.

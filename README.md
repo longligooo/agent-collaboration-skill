@@ -47,8 +47,10 @@ references/artifact-format.md  Turn, signal, manifest, and state formats
 references/tool-adapters.md    Codex, Claude Code, Cursor, and generic adapters
 references/examples.md         Example collaboration sequences
 scripts/collab.py              Standard-library protocol CLI
+scripts/adapters/             Cursor, Claude Code, and ChatGPT callers of `inbox`
 tests/test_collab.py           CLI and protocol regression tests
 tests/test_watch.py            Automatic wake-up (watch) tests
+tests/test_inbox.py            Shared inbox query and per-tool wake scripts
 ```
 
 ## Requirements
@@ -189,6 +191,7 @@ init               Create an immutable thread manifest
 new-turn           Create a non-overwriting turn template
 validate-artifact  Validate a completed turn
 inspect            Inspect one agent inbox
+inbox              Exit 0 when this agent has mail, otherwise exit 1
 publish            Atomically publish a turn signal
 acknowledge        Mark the current signal as processed
 init-wake          Write a wake config template for the watcher
