@@ -343,10 +343,13 @@ def unlock_file(handle: Any) -> None:
 
 
 def background_popen_kwargs() -> Dict[str, Any]:
-    """Detach the UI process on Windows and POSIX. Windows has no start_new_session."""
+    """Detach the UI process. Windows has no start_new_session and hides these flags off-Windows."""
     if os.name == "nt":
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        return {"creationflags": flags}
+        # CREATE_NEW_PROCESS_GROUP and CREATE_NO_WINDOW. Numeric values stay valid
+        # where the subprocess module does not define the names.
+        create_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        return {"creationflags": create_group | no_window}
     return {"start_new_session": True}
 
 

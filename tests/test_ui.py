@@ -184,7 +184,8 @@ class UiTest(unittest.TestCase):
                 spawned = ui_server.background_popen_kwargs()
         self.assertEqual(calls, [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)])
         self.assertNotIn("start_new_session", spawned)
-        self.assertTrue(spawned["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertEqual(spawned["creationflags"] & 0x00000200, 0x00000200)
+        self.assertEqual(spawned["creationflags"] & 0x08000000, 0x08000000)
 
 
 if __name__ == "__main__":
