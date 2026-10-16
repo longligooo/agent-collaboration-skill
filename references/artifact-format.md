@@ -28,7 +28,7 @@ Start every turn with a structured JSON block inside an HTML comment:
   "based_on": [
     ".ai-collab/threads/config-redesign/turns/round-0001-from-cursor-proposal.md"
   ],
-  "requested_action": "REVISION",
+  "requested_action": "REVISE",
   "created_at": "2026-08-03T14:30:00+08:00"
 }
 -->
@@ -92,7 +92,7 @@ Use a fixed signal file for each recipient:
   "to": "cursor",
   "document": ".ai-collab/threads/config-redesign/turns/round-0002-from-codex-challenge.md",
   "kind": "CHALLENGE",
-  "requested_action": "REVISION",
+  "requested_action": "REVISE",
   "status": "NEEDS_CHANGES",
   "created_at": "2026-08-03T14:35:00+08:00"
 }

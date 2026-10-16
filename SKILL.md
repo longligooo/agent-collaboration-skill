@@ -80,7 +80,7 @@ python scripts/collab.py publish \
   --agent codex \
   --to cursor \
   --document .ai-collab/threads/config-redesign/turns/round-0002-from-codex-challenge.md \
-  --requested-action REVISION \
+  --requested-action REVISE \
   --in-message-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
@@ -96,7 +96,7 @@ python scripts/collab.py new-turn \
   --role challenger \
   --kind CHALLENGE \
   --status NEEDS_CHANGES \
-  --requested-action REVISION \
+  --requested-action REVISE \
   --based-on .ai-collab/threads/config-redesign/turns/round-0001-from-cursor-proposal.md \
   --title "Configuration redesign challenge"
 ```
