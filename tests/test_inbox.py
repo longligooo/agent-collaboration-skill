@@ -179,11 +179,13 @@ class InboxTest(unittest.TestCase):
         item = coordinator["items"][0]
         self.assertTrue(item["is_coordinator"])
         self.assertFalse(item["may_edit_code"])
+        self.assertTrue(item["may_run_tests"])
         self.assertFalse(item["may_commit"])
         prompt = self.run_cli(
             "inbox", "--root", str(self.root), "--agent", "cursor", "--format", "prompt"
         ).stdout
         self.assertIn("Do not create, modify, or delete product code", prompt)
+        self.assertIn("You may run tests to check results", prompt)
         self.assertIn("Do not run git commit or git push", prompt)
 
         created = json.loads(
@@ -207,6 +209,7 @@ class InboxTest(unittest.TestCase):
         )
         self.assertFalse(worker["items"][0]["is_coordinator"])
         self.assertTrue(worker["items"][0]["may_edit_code"])
+        self.assertTrue(worker["items"][0]["may_run_tests"])
         self.assertFalse(worker["items"][0]["may_commit"])
         worker_prompt = self.run_cli(
             "inbox", "--root", str(self.root), "--agent", "codex", "--format", "prompt"

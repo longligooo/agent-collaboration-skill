@@ -673,7 +673,7 @@ def inbox_report(root: Path, agent: str, thread_id: Optional[str] = None) -> Dic
 
 
 def participant_policy(root: Path, thread_id: str, agent: str) -> Dict[str, Any]:
-    """The coordinator never edits product code. Nobody may commit unless a human says so."""
+    """The coordinator never edits product code. Acceptance may run tests. Nobody commits unless a human says so."""
     try:
         is_coordinator = load_manifest(root, thread_id).get("coordinator") == agent
     except CollaborationError:
@@ -681,6 +681,7 @@ def participant_policy(root: Path, thread_id: str, agent: str) -> Dict[str, Any]
     return {
         "is_coordinator": is_coordinator,
         "may_edit_code": not is_coordinator,
+        "may_run_tests": True,
         "may_commit": False,
     }
 
@@ -688,14 +689,17 @@ def participant_policy(root: Path, thread_id: str, agent: str) -> Dict[str, Any]
 def policy_suffix(root: Path, thread_id: str, agent: str) -> str:
     policy = participant_policy(root, thread_id, agent)
     lines = [
+        "You may run the project's existing tests and record the commands and results. "
+        "Running tests does not allow a commit.",
         "Do not run git commit or git push. Commit or push only when the human "
-        "explicitly requested that commit in the current instruction."
+        "explicitly requested that commit in the current instruction.",
     ]
     if policy["is_coordinator"]:
         lines.append(
             "You are the coordinator of this thread. Do not create, modify, or delete "
-            "product code, configuration, or tests. Write only your collaboration turn, "
-            "the recipient signal, and your own state file. Assign work and check the results."
+            "product code, configuration, or test files. You may run tests to check "
+            "results. Write only your collaboration turn, the recipient signal, and your "
+            "own state file."
         )
     return "\n" + "\n".join(lines)
 
@@ -744,7 +748,8 @@ def render_inbox_text(report: Dict[str, Any]) -> str:
         lines.append(
             "- {decision} thread={thread_id} round={round} from={sender} "
             "action={requested_action} message={message_id} document={document} "
-            "coordinator={coordinator} may_edit_code={may_edit_code} may_commit=no".format(
+            "coordinator={coordinator} may_edit_code={may_edit_code} "
+            "may_run_tests=yes may_commit=no".format(
                 decision=item["decision"],
                 thread_id=item["thread_id"],
                 round=item["round"],

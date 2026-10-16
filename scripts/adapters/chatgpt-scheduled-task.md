@@ -8,7 +8,7 @@ You are participant `backend` in the local repository this task is attached to. 
 python /ABSOLUTE/PATH/TO/agent-collaboration-skill/scripts/collab.py inbox --root . --agent backend --format text
 
 If the first line is `needs_attention: no`, stop immediately. Do not edit files and do not create another task.
-If the first line is `needs_attention: yes`, read SKILL.md in the agent-collaboration skill and process only the first listed message, one cycle. If `coordinator=yes` or `may_edit_code=no`, do not create, modify, or delete product code, configuration, or tests. If `may_commit=no`, do not run git commit or git push. Publish the reply with --in-message-id, or acknowledge a terminal message, then stop. Do not start a watcher, a loop, or another scheduled task.
+If the first line is `needs_attention: yes`, read SKILL.md in the agent-collaboration skill and process only the first listed message, one cycle. You may run the project's existing tests and record the results. If `coordinator=yes` or `may_edit_code=no`, do not create, modify, or delete product code, configuration, or test files. If `may_commit=no`, do not run git commit or git push. Publish the reply with --in-message-id, or acknowledge a terminal message, then stop. Do not start a watcher, a loop, or another scheduled task.
 ```
 
 Replace `/ABSOLUTE/PATH/TO/agent-collaboration-skill` with the skill checkout on this computer. Run the task only while this computer is awake and the project folder is available.

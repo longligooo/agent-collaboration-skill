@@ -102,7 +102,7 @@ The participant named `coordinator` in the thread manifest is the special coordi
 - signals the protocol tells them to publish;
 - their own state file.
 
-They must not create, modify, or delete product code, configuration, or tests, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. No file setting can grant the coordinator permission to edit product code.
+They must not create, modify, or delete product code, configuration, or test files, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. Checking includes running the project's existing tests and recording the commands and results. Running tests does not allow the coordinator to edit those tests or any other product file, and it does not allow any participant to commit. No file setting can grant the coordinator permission to edit product code.
 
 ## Commits
 

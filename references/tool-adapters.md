@@ -76,7 +76,7 @@ Cursor can keep a background script that resumes a conversation:
 CURSOR_CHAT_ID=<chat-id> sh scripts/adapters/cursor-wake.sh /path/to/repo lead
 ```
 
-`lead` is the participant name. The script calls `inbox --format prompt` for that name and, only when that exits 0, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with the printed prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`. The prompt tells the coordinator not to edit product code, and tells every participant not to commit.
+`lead` is the participant name. The script calls `inbox --format prompt` for that name and, only when that exits 0, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with the printed prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`. The prompt tells the coordinator not to edit product code, allows every participant to run existing tests, and tells every participant not to commit.
 
 ### Claude Code
 
