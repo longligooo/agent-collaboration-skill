@@ -35,6 +35,7 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - Do not move a resolved ticket back to in progress. A new problem gets a new ticket number.
 - A ticket stays blocked until every ticket named in `Blocked by` is `resolved`. `wontfix` does not lift that block.
 - `--topic` is the readable thread title. Summarize it in the primary language of the human's conversation. A Chinese conversation gets a Chinese title. Keep `thread_id` as a stable ASCII slug.
+- A new collaborator gets one opening prompt that tells them to use this skill on the new thread. A known collaborator gets no opening prompt.
 
 ## Choose The Collaboration Action
 
@@ -76,6 +77,25 @@ Use the project's declared ticket root in that path when it has one. This reposi
 
 4. Create the first turn with `new-turn`, fill its evidence and requested outcome, then publish it. Dispatch with `DECISION`. Accept with `REVIEW`. Set the ticket to `resolved` only after that review passes.
 5. Keep unrelated objectives in separate threads. One ticket stays one acceptance even when the thread splits for parallel work.
+6. Tell each assignee, using [Tell Collaborators About A New Thread](#tell-collaborators-about-a-new-thread).
+
+## Tell Collaborators About A New Thread
+
+After the dispatch turn is published, tell every participant who must act. A collaborator is known when that participant id already appears in a thread manifest in this repository, or the human has already had them use this skill. Everyone else is new.
+
+For each new collaborator, write a separate opening prompt in the conversation's primary language. The prompt's job is to make that person use this skill and join this thread. Include their participant name, the repository path, the thread id, the topic, and the instruction to read `SKILL.md` and run `inspect` as themselves. Tell them not to commit unless the human explicitly asks.
+
+When the human is talking to the coordinator directly, give the human those prompts and ask them to paste each one into that collaborator's chat. When the coordinator is a subagent of the current session, the agent that started the thread delivers the prompts. Do not ask the human to forward them.
+
+For a known collaborator, do not write an opening prompt. Ask the human to tell that person a new collaboration thread was assigned to them, and name the topic and thread id.
+
+A Chinese opening prompt for a new collaborator looks like this:
+
+```text
+你是协作者 frontend。请使用 agent-collaboration skill，加入仓库 /path/to/repo 的线程 config-redesign（配置改造）。先读 SKILL.md，再运行 python scripts/collab.py inspect --root /path/to/repo --agent frontend，并处理派给你的这一轮。除非人类明确要求，不要 git commit 或 git push。
+```
+
+A known collaborator only needs: `请告诉 frontend：协作线程「配置改造」（config-redesign）已派给你。`
 
 ## Process An Incoming Turn
 
