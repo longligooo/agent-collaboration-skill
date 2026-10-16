@@ -108,6 +108,12 @@ When the human does name one, that participant may read the repository and may w
 
 They must not create, modify, or delete product code, configuration, or test files, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. Checking includes running the project's existing tests and recording the commands and results. Running tests does not allow the coordinator to edit those tests or any other product file, and it does not allow any participant to commit. No file setting can grant the coordinator permission to edit product code.
 
+After publishing the dispatch turn, tell each assignee. A participant id that already appears in a thread manifest in this repository, or that the human has already had use this skill, is a known collaborator. Anyone else is new.
+
+A new collaborator receives one opening prompt. The prompt tells them to use this skill, names the repository, thread id, and topic, and points them at `SKILL.md` and `inspect` for their own participant id. Write it in the conversation's primary language. When the human is talking to the coordinator, the coordinator gives each prompt to the human to paste into that collaborator's chat. When the coordinator is a subagent of the current session, the agent that started the thread delivers the prompts and does not ask the human to forward them.
+
+A known collaborator does not get an opening prompt. The human tells them that a new thread was assigned, naming the topic and thread id.
+
 ## Commits
 
 No participant may run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Writing a turn or signal is not a commit. `IMPLEMENT`, `REVIEW`, and the other requested actions do not authorize a commit. A human may start `collab.py watch --git-sync` themselves; a participant must not add that flag or commit on the watcher's behalf. `--git-sync` publishes files under `.ai-collab/threads/` only.

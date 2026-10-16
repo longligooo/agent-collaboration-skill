@@ -116,6 +116,8 @@ python /path/to/agent-collaboration/scripts/collab.py init \
 
 `--topic` is the readable title, summarized in the primary language of the conversation. A Chinese conversation uses a Chinese topic, for example `--topic "配置改造"`, while `--thread-id` stays `config-redesign`. The sample above is English because that conversation is English.
 
+A new collaborator gets one opening prompt that tells them to use this skill on that thread. The human pastes it into their chat, unless the coordinator is a subagent of the current session: then the agent that started the thread delivers it. A collaborator who already uses the skill gets no opening prompt. The human only tells them a new thread was assigned.
+
 Use the project's declared ticket root in that path when it has one.
 
 Create the first immutable turn template:
