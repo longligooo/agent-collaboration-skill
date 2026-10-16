@@ -428,9 +428,23 @@ function render() {
           "div",
           { class: "top" },
           h("div", {}, h("h1", {}, title), subtitle ? h("p", { class: "sub" }, subtitle) : null),
-          snapshot
-            ? h("span", { class: "meta" }, `更新于 ${formatTime(snapshot.generated_at)}`)
-            : null,
+          h(
+            "div",
+            { class: "top-actions" },
+            snapshot
+              ? h("span", { class: "meta" }, `更新于 ${formatTime(snapshot.generated_at)}`)
+              : null,
+            h(
+              "button",
+              {
+                type: "button",
+                class: "refresh",
+                disabled: loading,
+                onclick: () => load(),
+              },
+              "刷新",
+            ),
+          ),
         ),
         body,
       ),
@@ -445,6 +459,7 @@ function nav(label, href, isActive) {
 async function load() {
   if (loading) return;
   loading = true;
+  render();
   try {
     const response = await fetch("/api/snapshot", { cache: "no-store" });
     if (!response.ok) throw new Error(`读取失败（${response.status}）`);
@@ -460,4 +475,3 @@ async function load() {
 
 window.addEventListener("hashchange", render);
 load();
-setInterval(load, 5000);

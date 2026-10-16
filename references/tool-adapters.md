@@ -60,7 +60,7 @@ The web UI is off until a human asks to start the collaboration background or th
 python scripts/collab.py ui --root .
 ```
 
-The process binds to `127.0.0.1:23451`. When that process is already up, the command registers the current repository and does not start another one. The UI reads every registered repository on this machine and can show one participant across projects and threads.
+The process binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. When that process is already up, the command registers the current repository and does not start another one. Do not start `ui --serve` directly in place of this command. The UI reads every registered repository on this machine and can show one participant across projects and threads. The page does not refresh by itself; use the 刷新 button.
 
 ## Shared Inbox Query
 

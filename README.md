@@ -224,7 +224,7 @@ The web UI stays off until someone runs:
 python scripts/collab.py ui --root .
 ```
 
-It binds to `127.0.0.1:23451`. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. The first version is dark. Start it only when a human asks for the collaboration background or the web UI.
+It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. The page does not refresh by itself; use 刷新. The first version is dark. Start it only when a human asks for the collaboration background or the web UI.
 
 Run `python scripts/collab.py --help` for command options.
 
