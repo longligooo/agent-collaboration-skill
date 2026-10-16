@@ -99,6 +99,7 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
         "status": "NONE",
         "terminal": False,
         "round": 0,
+        "started_at": "",
         "updated_at": "",
         "turns": [],
         "signals": [],
@@ -113,6 +114,7 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
     record["objective"] = manifest["objective"]
     record["coordinator"] = collab.designated_coordinator(manifest)
     record["participants"] = list(manifest["participants"])
+    record["started_at"] = manifest.get("created_at") or ""
     turns_dir = collab.thread_directory(root, thread_id) / "turns"
     turns: List[Dict[str, Any]] = []
     if turns_dir.is_dir():
@@ -247,6 +249,8 @@ def collaborator_records(projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                         "participant": agent in thread["participants"],
                         "pending": len(pending),
                         "status": thread["status"],
+                        "started_at": thread.get("started_at") or "",
+                        "terminal": bool(thread.get("terminal")),
                         "updated_at": thread["updated_at"],
                     }
                 )

@@ -133,6 +133,8 @@ class UiTest(unittest.TestCase):
         self.assertIn("刷新".encode("utf-8"), script)
         self.assertIn("进行中".encode("utf-8"), script)
         self.assertIn(b"collaboratorPills", script)
+        self.assertIn("已持续".encode("utf-8"), script)
+        self.assertIn(b"threadTiming", script)
         self.assertNotIn(b"setInterval", script)
         css = urlopen(f"http://127.0.0.1:{port}/app.css", timeout=3).read()
         self.assertIn(b"color-scheme: dark", css)
@@ -150,6 +152,10 @@ class UiTest(unittest.TestCase):
         self.assertEqual(alpha_thread["participants"], ["frontend", "lead"])
         alpha = next(project for project in body["projects"] if project["name"] == "alpha")
         self.assertEqual(alpha["threads"][0]["coordinator"], "lead")
+        manifest = json.loads((first / ".ai-collab/threads/design/thread.json").read_text(encoding="utf-8"))
+        self.assertEqual(alpha["threads"][0]["started_at"], manifest["created_at"])
+        self.assertEqual(alpha_thread["started_at"], manifest["created_at"])
+        self.assertFalse(alpha["threads"][0]["terminal"])
         self.assertIn("Ready:", alpha["threads"][0]["turns"][0]["summary"])
 
     def test_command_starts_one_process_then_only_registers(self):
