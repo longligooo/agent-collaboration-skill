@@ -120,13 +120,43 @@ python scripts/collab.py acknowledge \
   --message-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
+## Run Rounds Automatically
+
+`scripts/collab.py watch` removes manual forwarding. It scans inboxes and, whenever a `NEW` or `TERMINAL` signal is waiting, starts the recipient's non-interactive CLI (`claude -p`, `codex exec`, `cursor-agent -p`, and so on) for one processing cycle. Commands live in `.ai-collab/wake.json`; `init-wake` writes a template.
+
+When a user asks for automatic collaboration:
+
+1. Create the thread and publish the first turn as usual.
+2. Ensure `.ai-collab/wake.json` lists every automated participant:
+
+```bash
+python scripts/collab.py init-wake --root . --agents cursor codex claude-code
+```
+
+3. Start the watcher in a terminal that outlives your session, for example `tmux` or `nohup`, or ask the user to run it:
+
+```bash
+python scripts/collab.py watch --root . --thread-id config-redesign
+```
+
+The watcher exits when the thread reaches a terminal status and every automated participant has processed its signal. It stops early on a `.ai-collab/STOP` or `.ai-collab/threads/<thread-id>/STOP` file, on the round or wake limits, or when a participant fails to process its signal after the allowed attempts.
+
+When the watcher starts you (`COLLAB_WATCHER=1` is set):
+
+- Run exactly one processing cycle for the named thread and message, then exit.
+- Do not wait for or ask the user anything; nobody is reading the session.
+- End every `NEW` cycle by publishing a turn with `--in-message-id`, and every `TERMINAL` cycle by its requested action or `acknowledge`. A cycle that publishes nothing is retried and then reported as stuck.
+- Address each turn to the participant who must act next. Publish `AGREED`, `CLOSED`, or `CANCELLED` when the objective is met or cannot be met, so the thread terminates.
+- When a human decision is required, publish `NEEDS_INPUT` to the coordinator or a human participant instead of guessing.
+- Never start another watcher, loop, or scheduler.
+
 ## Adapt To The Tool
 
 Keep the protocol identical across tools. Change only discovery and wake-up behavior:
 
 - Use native skills when the tool supports `SKILL.md`.
 - Use project rules or `AGENTS.md` to point other tools to this file.
-- Use hooks, file watchers, scheduled jobs, or manual prompts to invoke one scan cycle.
+- Prefer `collab.py watch` for unattended multi-round work; use hooks, scheduled jobs, or manual prompts only when a tool has no non-interactive CLI.
 - Keep polling configuration outside this skill and disable it when the thread becomes terminal.
 
 Do not claim continuous monitoring unless a tool-specific watcher or scheduler is actually active.

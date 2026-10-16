@@ -48,6 +48,7 @@ references/tool-adapters.md    Codex, Claude Code, Cursor, and generic adapters
 references/examples.md         Example collaboration sequences
 scripts/collab.py              Standard-library protocol CLI
 tests/test_collab.py           CLI and protocol regression tests
+tests/test_watch.py            Automatic wake-up (watch) tests
 ```
 
 ## Requirements
@@ -55,9 +56,11 @@ tests/test_collab.py           CLI and protocol regression tests
 - a shared Git repository or filesystem;
 - Python 3.9 or later for the optional CLI;
 - an AI coding tool that can read Markdown and JSON;
-- a manual prompt, hook, watcher, scheduled job, or automation to wake agents.
+- a way to wake agents: the bundled `collab.py watch` command with each tool's
+  non-interactive CLI, or a manual prompt, hook, or scheduled job.
 
-The protocol itself does not claim or create continuous background monitoring.
+The protocol itself does not create background monitoring; `collab.py watch`
+is an optional runner that does.
 
 ## Installation
 
@@ -131,6 +134,34 @@ Only a `NEW` decision should create a response. `EMPTY`, `DUPLICATE`, and
 `INVALID` decisions must not create files or modify business code. Terminal
 signals must follow their requested acknowledgement or closure action.
 
+## Automatic Multi-Round Collaboration
+
+Without automation, someone must tell each agent "a new message is waiting"
+after every turn. The `watch` command does that instead: it scans each agent's
+inbox and runs the recipient's non-interactive CLI (`claude -p`, `codex exec`,
+`cursor-agent -p`, `gemini -p`, ...) for one processing cycle whenever a signal
+is waiting. Each reply creates the next signal, so the thread proceeds round by
+round until an agent publishes `AGREED`, `CLOSED`, or `CANCELLED`.
+
+```bash
+# once per repository: choose the wake command for each participant
+python /path/to/agent-collaboration/scripts/collab.py init-wake \
+  --root . --agents cursor codex claude-code
+
+# open the thread and publish the first turn (manually or by asking any agent),
+# then let the watcher drive the remaining rounds
+python /path/to/agent-collaboration/scripts/collab.py watch \
+  --root . --thread-id config-redesign
+```
+
+The watcher stops when the thread is finished, when a `STOP` file appears,
+or when a round, wake, or retry limit is reached. Agent output is written to
+`.ai-collab/logs/`. Participants on different machines can share a thread
+through Git with `--agents <local-agents> --git-sync`. Review the generated
+`.ai-collab/wake.json` permissions before running unattended. See
+[Tool Adapters](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)
+for the configuration format and safety limits.
+
 ## Workspace Format
 
 Each target repository receives a `.ai-collab` workspace:
@@ -160,6 +191,8 @@ validate-artifact  Validate a completed turn
 inspect            Inspect one agent inbox
 publish            Atomically publish a turn signal
 acknowledge        Mark the current signal as processed
+init-wake          Write a wake config template for the watcher
+watch              Wake agents automatically whenever a signal is waiting
 ```
 
 Run `python scripts/collab.py --help` for command options.
@@ -173,7 +206,8 @@ python -m unittest discover -s tests -v
 ```
 
 The tests cover publication, inspection, acknowledgement, duplicate detection,
-terminal signals, immutable rounds, safe repository paths, and signal identity.
+terminal signals, immutable rounds, safe repository paths, signal identity,
+and unattended multi-round runs of the watcher, including its limits and Git sync.
 
 ## Security And Scope
 

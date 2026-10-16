@@ -161,7 +161,7 @@ Each participant may clean up only its own temporary signals, state, hooks, watc
 
 ## Human Control
 
-A human may pause, redirect, close, or cancel a thread at any time. Stop automated activity immediately when instructed. When collaboration resumes, record the changed scope in a new turn rather than rewriting history.
+A human may pause, redirect, close, or cancel a thread at any time. Stop automated activity immediately when instructed. Creating `.ai-collab/STOP` or `.ai-collab/threads/<thread-id>/STOP` halts `collab.py watch` before it wakes another agent. When collaboration resumes, record the changed scope in a new turn rather than rewriting history.
 
 ## Security
 
