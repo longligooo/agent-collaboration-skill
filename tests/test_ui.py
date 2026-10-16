@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import signal
@@ -7,8 +8,10 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.request import Request, urlopen
 
 
@@ -125,7 +128,10 @@ class UiTest(unittest.TestCase):
         request_json(port, "/api/register", {"root": str(second)})
 
         page = urlopen(f"http://127.0.0.1:{port}/app.js", timeout=3)
-        self.assertIn("总览".encode("utf-8"), page.read())
+        script = page.read()
+        self.assertIn("总览".encode("utf-8"), script)
+        self.assertIn("刷新".encode("utf-8"), script)
+        self.assertNotIn(b"setInterval", script)
         css = urlopen(f"http://127.0.0.1:{port}/app.css", timeout=3)
         self.assertIn(b"color-scheme: dark", css.read())
         body = request_json(port, "/api/snapshot")
@@ -152,6 +158,33 @@ class UiTest(unittest.TestCase):
         self.assertEqual(request_json(port, "/api/health")["pid"], started["pid"])
         roots = set(request_json(port, "/api/health")["projects"])
         self.assertEqual(roots, {str(first.resolve()), str(second.resolve())})
+
+    def test_ui_server_does_not_import_fcntl_at_import_time(self):
+        tree = ast.parse(Path(ui_server.__file__).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+                self.assertNotIn("fcntl", names)
+            if isinstance(node, ast.ImportFrom):
+                self.assertNotEqual(node.module, "fcntl")
+
+    def test_windows_lock_uses_byte_range_and_spawn_avoids_setsid(self):
+        calls = []
+        fake = types.SimpleNamespace(
+            LK_LOCK=0,
+            LK_UNLCK=1,
+            locking=lambda fd, mode, nbytes: calls.append((mode, nbytes)),
+        )
+        handle = tempfile.TemporaryFile()
+        self.addCleanup(handle.close)
+        with mock.patch.dict(sys.modules, {"msvcrt": fake}):
+            with mock.patch.object(ui_server.os, "name", "nt"):
+                ui_server.lock_file(handle)
+                ui_server.unlock_file(handle)
+                spawned = ui_server.background_popen_kwargs()
+        self.assertEqual(calls, [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)])
+        self.assertNotIn("start_new_session", spawned)
+        self.assertTrue(spawned["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP)
 
 
 if __name__ == "__main__":

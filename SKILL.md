@@ -177,7 +177,7 @@ Do not start the web UI during an ordinary turn. Start it only when the human ex
 python scripts/collab.py ui --root .
 ```
 
-This listens on `127.0.0.1:23451`. If a UI is already running, the command only registers the current repository and does not start a second process. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project.
+This listens on `127.0.0.1:23451`. The same command is used on Windows, macOS, and Linux. It probes that port first. If a UI is already running, the command only registers the current repository and does not start a second process. Do not skip the probe and start `ui --serve` by hand. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project. It does not refresh by itself. Use the 刷新 button.
 
 When the human asks to start the collaboration background, run this command and then start the wake script or `watch` they asked for.
 

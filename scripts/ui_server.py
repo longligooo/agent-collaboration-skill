@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -318,6 +317,39 @@ def register_project(root: Path, path: Optional[Path] = None) -> Dict[str, Any]:
     return {"result": "REGISTERED", "created": created, "root": str(resolved), "project_id": project_id(str(resolved))}
 
 
+def lock_file(handle: Any) -> None:
+    """Exclusive lock so two ui commands cannot both spawn a server."""
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def unlock_file(handle: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def background_popen_kwargs() -> Dict[str, Any]:
+    """Detach the UI process on Windows and POSIX. Windows has no start_new_session."""
+    if os.name == "nt":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        return {"creationflags": flags}
+    return {"start_new_session": True}
+
+
 def health_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/api/health"
 
@@ -466,8 +498,12 @@ def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
         return {**registered, "started": False, "url": f"http://127.0.0.1:{port}/", "pid": existing.get("pid")}
 
     lock_path = home / "ui.lock"
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    lock_path.touch(exist_ok=True)
+    with lock_path.open("r+b") as lock:
+        try:
+            lock_file(lock)
+        except OSError as exc:
+            raise collab.CollaborationError(f"could not lock {lock_path}: {exc}") from exc
         try:
             existing = read_health(port)
             if existing:
@@ -481,11 +517,11 @@ def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
             log_handle = (home / "ui.log").open("a", encoding="utf-8")
             process = subprocess.Popen(
                 [sys.executable, str(collab.SCRIPT_PATH), "ui", "--serve", "--port", str(port)],
-                start_new_session=True,
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 env={**os.environ, "COLLAB_UI_HOME": str(home)},
+                **background_popen_kwargs(),
             )
             log_handle.close()
             deadline = time.time() + 8
@@ -507,4 +543,4 @@ def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
             process.terminate()
             raise collab.CollaborationError(f"web UI did not become ready; see {home / 'ui.log'}")
         finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            unlock_file(lock)

@@ -106,6 +106,29 @@ nav { display: flex; flex-direction: column; gap: 4px; }
   margin-bottom: 22px;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.refresh {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.refresh:hover { background: var(--panel-2); }
+
+.refresh:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
 h1 {
   margin: 0;
   font-size: 22px;
