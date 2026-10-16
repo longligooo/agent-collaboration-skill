@@ -1344,6 +1344,17 @@ def cmd_init_wake(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    import ui_server
+
+    if args.serve:
+        ui_server.serve(args.port)
+        return 0
+    root = repository_root(args.root)
+    emit(ui_server.ensure_ui(root, args.port))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Manage the agent-collaboration file protocol."
@@ -1455,7 +1466,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch_parser.add_argument("--force", action="store_true", help="take over a held lock")
     watch_parser.set_defaults(handler=cmd_watch)
+
+    ui_parser = subparsers.add_parser(
+        "ui",
+        help="open the local web UI on port 23451, or only register this repository if it is already running",
+    )
+    ui_parser.add_argument("--root", default=".")
+    ui_parser.add_argument("--port", type=int, default=ui_server_port())
+    ui_parser.add_argument("--serve", action="store_true", help="run the server in the foreground")
+    ui_parser.set_defaults(handler=cmd_ui)
     return parser
+
+
+def ui_server_port() -> int:
+    return 23451
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

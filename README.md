@@ -47,10 +47,13 @@ references/artifact-format.md  Turn, signal, manifest, and state formats
 references/tool-adapters.md    Codex, Claude Code, Cursor, and generic adapters
 references/examples.md         Example collaboration sequences
 scripts/collab.py              Standard-library protocol CLI
+scripts/ui_server.py           Local web UI server
 scripts/adapters/             Cursor, Claude Code, and ChatGPT callers of `inbox`
+ui/                            Dark local web UI
 tests/test_collab.py           CLI and protocol regression tests
 tests/test_watch.py            Automatic wake-up (watch) tests
 tests/test_inbox.py            Shared inbox query and per-tool wake scripts
+tests/test_ui.py               Local web UI registry, views, and single-process startup
 ```
 
 ## Requirements
@@ -196,7 +199,18 @@ publish            Atomically publish a turn signal
 acknowledge        Mark the current signal as processed
 init-wake          Write a wake config template for the watcher
 watch              Wake agents automatically whenever a signal is waiting
+ui                 Start the local web UI, or only register this repository
 ```
+
+## Local Web UI
+
+The web UI stays off until someone runs:
+
+```bash
+python scripts/collab.py ui --root .
+```
+
+It binds to `127.0.0.1:23451`. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. The first version is dark. Start it only when a human asks for the collaboration background or the web UI.
 
 Run `python scripts/collab.py --help` for command options.
 

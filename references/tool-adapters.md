@@ -52,6 +52,16 @@ If the tool has no skill system, provide this repository path in the prompt and 
 - Python 3.9 or later for the optional CLI;
 - a manual, hook-based, or scheduled wake-up mechanism.
 
+## Local Web UI
+
+The web UI is off until a human asks to start the collaboration background or the web UI. Run:
+
+```bash
+python scripts/collab.py ui --root .
+```
+
+The process binds to `127.0.0.1:23451`. When that process is already up, the command registers the current repository and does not start another one. The UI reads every registered repository on this machine and can show one participant across projects and threads.
+
 ## Shared Inbox Query
 
 Cursor, Claude Code, and ChatGPT each wake their own conversation differently. All three call the same query:

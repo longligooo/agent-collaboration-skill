@@ -143,6 +143,18 @@ The ready-made callers take that name as an argument. The script selects the too
 
 Ask the user to leave the computer awake. A background script stops when `.ai-collab/STOP` exists. Do not create a second scheduler for an agent that already has one. When one of these callers starts you, handle the single listed message and exit.
 
+## Local Web UI
+
+Do not start the web UI during an ordinary turn. Start it only when the human explicitly asks to start the collaboration background or the web UI. Matching requests include "启动协作后台", "启动 web ui", and "打开协作界面".
+
+```bash
+python scripts/collab.py ui --root .
+```
+
+This listens on `127.0.0.1:23451`. If a UI is already running, the command only registers the current repository and does not start a second process. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project.
+
+When the human asks to start the collaboration background, run this command and then start the wake script or `watch` they asked for.
+
 ## Run Rounds Automatically
 
 `scripts/collab.py watch` removes manual forwarding. It scans inboxes and, whenever a `NEW` or `TERMINAL` signal is waiting, starts the recipient's non-interactive CLI (`claude -p`, `codex exec`, `agent -p`, and so on) for one processing cycle. Commands live in `.ai-collab/wake.json`; `init-wake` writes a template.
