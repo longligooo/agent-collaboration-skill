@@ -1,5 +1,5 @@
 # README 排版重构
-Status: ready-for-agent
+Status: ready-for-human
 
 ## 目标
 参考热门 Agent 项目的真实 README，为 Collaboration 仓库制作更清晰、美观、易用的 GitHub README；同步英文、简体中文、繁體中文、法文、韩文、日文。

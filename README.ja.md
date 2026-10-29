@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
+  <a href="#readme-installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#installation">インストール</a> · <a href="#quick-start">クイックスタート</a> · <a href="#automatic-multi-round-collaboration">自動協働</a> · <a href="#reference">リファレンス</a>
+  <a href="#readme-installation">インストール</a> · <a href="#readme-quick-start">クイックスタート</a> · <a href="#readme-workflow">協働の流れ</a> · <a href="#readme-automatic-multi-round-collaboration">自動協働</a> · <a href="#readme-reference">リファレンス</a>
 </p>
 
 AI コーディングエージェントと人間の参加者が、継続的かつ記録を残しながら協働するための、ベンダーに依存しないスキルとファイルプロトコルです。ベンダー固有のサービスではなく、共有の Markdown ファイルと JSON ファイルを使います。Python CLI、オプションの自動起動ランナー、ローカル Web UI が含まれています。
@@ -43,7 +43,7 @@ AI コーディングツールは通常、それぞれ独自に会話の状態�
 
 </details>
 
-<a id="installation"></a>
+<a id="readme-installation"></a>
 
 ## インストール
 
@@ -74,13 +74,13 @@ git clone https://github.com/longligooo/agent-collaboration-skill.git
 
 Cursor など、プロジェクトの指示を使うツールでは、プロジェクトルールまたは `AGENTS.md` の項目から `SKILL.md` を参照するようにします。プロトコルの正本は 1 つだけにしてください。詳しくは[ツールアダプター](references/tool-adapters.md)を参照してください。
 
-<a id="quick-start"></a>
+<a id="readme-quick-start"></a>
 
 ## クイックスタート
 
 ### 1. 仕様とチケットを準備
 
-<a id="tickets"></a>
+<a id="readme-tickets"></a>
 
 #### チケット
 
@@ -150,7 +150,7 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
 > [!IMPORTANT]
 > 応答を作成してよいのは、判定が `NEW` の場合だけです。`EMPTY`、`DUPLICATE`、`INVALID` の場合は、ファイルを作成したり、業務コードを変更したりしてはいけません。終端シグナルでは、要求された受領確認または終了処理に従う必要があります。
 
-<a id="workflow"></a>
+<a id="readme-workflow"></a>
 
 ## 協働の流れ
 
@@ -192,7 +192,7 @@ Codex、Claude Code、Cursor などのコーディングエージェントが、
 
 </details>
 
-<a id="automatic-multi-round-collaboration"></a>
+<a id="readme-automatic-multi-round-collaboration"></a>
 
 ## 複数ラウンドの自動協働
 
@@ -211,7 +211,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 
 ウォッチャーは、スレッドの終了時、`STOP` ファイルの出現時、またはラウンド数、起動回数、再試行回数の上限に達したときに停止します。エージェントの出力は `.ai-collab/logs/` に書き込まれます。異なるマシン上の参加者は、`--agents backend --git-sync` を指定することで、Git を通じてスレッドを共有できます。`--git-sync` が公開するのは `.ai-collab/threads/` だけで、有効にできるのは人間だけです。人間が明示的に依頼しない限り、参加者は製品コードをコミットしません。無人で実行する前に、生成された `.ai-collab/wake.json` の権限を確認してください。設定形式と安全上の制限については、[ツールアダプター](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)を参照してください。
 
-<a id="local-web-ui"></a>
+<a id="readme-local-web-ui"></a>
 
 ## ローカル Web UI
 
@@ -225,7 +225,7 @@ Windows、macOS、Linux で `127.0.0.1:23451` にバインドします。コマ�
 
 コマンドのオプションは `python scripts/collab.py --help` で確認できます。
 
-<a id="reference"></a>
+<a id="readme-reference"></a>
 
 ## リファレンス
 
@@ -306,7 +306,7 @@ tests/test_ui.py               ローカル Web UI の登録、表示、単一�
 
 </details>
 
-<a id="validation"></a>
+<a id="readme-validation"></a>
 
 ## 検証
 
@@ -318,14 +318,14 @@ python -m unittest discover -s tests -v
 
 テストは、公開、受信箱の確認、受領確認、重複検出、終端シグナル、変更不可のラウンド、安全なリポジトリパス、シグナルの同一性、そしてウォッチャーの無人での複数ラウンド実行を対象とし、制限と Git 同期も含みます。
 
-<a id="security-and-scope"></a>
+<a id="readme-security-and-scope"></a>
 
 ## セキュリティと作業範囲
 
 > [!IMPORTANT]
 > 協働アクションの依頼は、追加の権限を与えるものではありません。エージェントは引き続きユーザーのタスク範囲を守り、コマンドを実行する前に独立して評価する必要があります。ターン、マニフェスト、シグナル、状態ファイルに秘密情報を保存してはいけません。
 
-<a id="license"></a>
+<a id="readme-license"></a>
 
 ## ライセンス
 

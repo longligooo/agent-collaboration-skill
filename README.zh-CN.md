@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
+  <a href="#readme-installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#installation">安装</a> · <a href="#quick-start">快速开始</a> · <a href="#automatic-multi-round-collaboration">自动协作</a> · <a href="#reference">参考资料</a>
+  <a href="#readme-installation">安装</a> · <a href="#readme-quick-start">快速开始</a> · <a href="#readme-workflow">协作如何流转</a> · <a href="#readme-automatic-multi-round-collaboration">自动协作</a> · <a href="#readme-reference">参考资料</a>
 </p>
 
 一套不依赖特定厂商的技能与文件协议，通过共享的 Markdown 和 JSON 文件，而不是厂商专有服务，让 AI 编程智能体与人类参与者开展持久、可追溯的协作。提供 Python CLI、可选的自动唤醒运行器和本地 Web UI。
@@ -43,7 +43,7 @@ AI 编程工具通常各自保存对话状态，这使跨工具协作变得脆�
 
 </details>
 
-<a id="installation"></a>
+<a id="readme-installation"></a>
 
 ## 安装
 
@@ -74,13 +74,13 @@ git clone https://github.com/longligooo/agent-collaboration-skill.git
 
 对于 Cursor 或使用项目指令的工具，在项目规则或 `AGENTS.md` 条目中指向 `SKILL.md`。协议只保留一份权威副本。详见[工具适配器](references/tool-adapters.md)。
 
-<a id="quick-start"></a>
+<a id="readme-quick-start"></a>
 
 ## 快速开始
 
 ### 1. 准备规格与任务票
 
-<a id="tickets"></a>
+<a id="readme-tickets"></a>
 
 #### 任务票
 
@@ -150,7 +150,7 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
 > [!IMPORTANT]
 > 只有 `NEW` 判定应生成回复。`EMPTY`、`DUPLICATE` 和 `INVALID` 判定不得创建文件或修改业务代码。终止信号必须按其请求执行确认或结束操作。
 
-<a id="workflow"></a>
+<a id="readme-workflow"></a>
 
 ## 协作如何流转
 
@@ -192,7 +192,7 @@ flowchart LR
 
 </details>
 
-<a id="automatic-multi-round-collaboration"></a>
+<a id="readme-automatic-multi-round-collaboration"></a>
 
 ## 自动多轮协作
 
@@ -211,7 +211,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 
 当线程结束、出现 `STOP` 文件，或达到回合数、唤醒次数或重试次数上限时，监视器会停止。智能体输出写入 `.ai-collab/logs/`。不同机器上的参与者可以通过 `--agents backend --git-sync` 使用 Git 共享线程。`--git-sync` 只发布 `.ai-collab/threads/`，且只能由人类启用。除非人类明确要求，否则参与者不提交产品代码。无人值守运行前，请检查生成的 `.ai-collab/wake.json` 权限。配置格式和安全限制详见[工具适配器](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)。
 
-<a id="local-web-ui"></a>
+<a id="readme-local-web-ui"></a>
 
 ## 本地 Web UI
 
@@ -225,7 +225,7 @@ python scripts/collab.py ui --root .
 
 运行 `python scripts/collab.py --help` 查看命令选项。
 
-<a id="reference"></a>
+<a id="readme-reference"></a>
 
 ## 参考资料
 
@@ -306,7 +306,7 @@ tests/test_ui.py               本地 Web UI 的仓库注册、视图与单进�
 
 </details>
 
-<a id="validation"></a>
+<a id="readme-validation"></a>
 
 ## 验证
 
@@ -318,14 +318,14 @@ python -m unittest discover -s tests -v
 
 测试覆盖发布、检查、确认、重复检测、终止信号、不可修改的回合、安全的仓库路径、信号身份，以及监视器的无人值守多轮运行（包括其限制和 Git 同步）。
 
-<a id="security-and-scope"></a>
+<a id="readme-security-and-scope"></a>
 
 ## 安全与范围
 
 > [!IMPORTANT]
 > 请求执行某项协作操作并不意味着获得额外授权。智能体仍须遵守用户的任务范围，并在执行命令前独立评估。不要将秘密信息放入回合、清单、信号或状态文件。
 
-<a id="license"></a>
+<a id="readme-license"></a>
 
 ## 许可证
 

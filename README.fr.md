@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
+  <a href="#readme-installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#installation">Installation</a> · <a href="#quick-start">Démarrage rapide</a> · <a href="#automatic-multi-round-collaboration">Automatisation</a> · <a href="#reference">Référence</a>
+  <a href="#readme-installation">Installation</a> · <a href="#readme-quick-start">Démarrage rapide</a> · <a href="#readme-workflow">Le déroulement d’une collaboration</a> · <a href="#readme-automatic-multi-round-collaboration">Automatisation</a> · <a href="#readme-reference">Référence</a>
 </p>
 
 Une compétence et un protocole de fichiers indépendants des fournisseurs pour une collaboration durable entre agents de programmation IA et participants humains, au moyen de fichiers Markdown et JSON partagés plutôt que d'un service propre à un fournisseur. Le projet comprend une CLI Python, un exécuteur facultatif de réveil automatique et une interface web locale.
@@ -43,7 +43,7 @@ Aucune API de fournisseur ni aucun service en arrière-plan n'est nécessaire.
 
 </details>
 
-<a id="installation"></a>
+<a id="readme-installation"></a>
 
 ## Installation
 
@@ -74,13 +74,13 @@ Pour les outils prenant nativement en charge les compétences, copiez le dépôt
 
 Pour Cursor ou les outils utilisant des instructions de projet, faites pointer une règle de projet ou une entrée de `AGENTS.md` vers `SKILL.md`. Ne conservez qu'une seule copie canonique du protocole. Consultez [Adaptateurs d'outils](references/tool-adapters.md) pour plus de détails.
 
-<a id="quick-start"></a>
+<a id="readme-quick-start"></a>
 
 ## Démarrage rapide
 
 ### 1. Préparer la spécification et le ticket
 
-<a id="tickets"></a>
+<a id="readme-tickets"></a>
 
 #### Tickets
 
@@ -150,7 +150,7 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
 > [!IMPORTANT]
 > Seule une décision `NEW` doit donner lieu à une réponse. Les décisions `EMPTY`, `DUPLICATE` et `INVALID` ne doivent entraîner ni création de fichiers ni modification du code métier. Les signaux terminaux doivent être traités selon l'action demandée d'accusé de réception ou de clôture.
 
-<a id="workflow"></a>
+<a id="readme-workflow"></a>
 
 ## Le déroulement d’une collaboration
 
@@ -192,7 +192,7 @@ Cas d'utilisation typiques :
 
 </details>
 
-<a id="automatic-multi-round-collaboration"></a>
+<a id="readme-automatic-multi-round-collaboration"></a>
 
 ## Collaboration automatique à plusieurs tours
 
@@ -211,7 +211,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 
 Le processus de surveillance s'arrête lorsque le fil est terminé, lorsqu'un fichier `STOP` apparaît ou lorsqu'une limite de tours, de réveils ou de nouvelles tentatives est atteinte. La sortie des agents est écrite dans `.ai-collab/logs/`. Des participants sur des machines différentes peuvent partager un fil via Git avec `--agents backend --git-sync`. `--git-sync` ne publie que `.ai-collab/threads/`, et seul un humain peut l'activer. Les participants ne créent pas de commits du code produit, sauf demande explicite de l'humain. Examinez les permissions du fichier `.ai-collab/wake.json` généré avant une exécution sans supervision. Consultez [Adaptateurs d'outils](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch) pour le format de configuration et les limites de sécurité.
 
-<a id="local-web-ui"></a>
+<a id="readme-local-web-ui"></a>
 
 ## Interface web locale
 
@@ -225,7 +225,7 @@ Elle écoute sur `127.0.0.1:23451` sous Windows, macOS et Linux. La commande son
 
 Exécutez `python scripts/collab.py --help` pour consulter les options des commandes.
 
-<a id="reference"></a>
+<a id="readme-reference"></a>
 
 ## Référence
 
@@ -306,7 +306,7 @@ tests/test_ui.py               Registre, vues et démarrage à processus unique 
 
 </details>
 
-<a id="validation"></a>
+<a id="readme-validation"></a>
 
 ## Validation
 
@@ -318,14 +318,14 @@ python -m unittest discover -s tests -v
 
 Les tests couvrent la publication, l'inspection, les accusés de réception, la détection des doublons, les signaux terminaux, les tours immuables, la sécurité des chemins du dépôt, l'identité des signaux et les exécutions sans supervision à plusieurs tours du processus de surveillance, y compris ses limites et la synchronisation Git.
 
-<a id="security-and-scope"></a>
+<a id="readme-security-and-scope"></a>
 
 ## Sécurité et périmètre
 
 > [!IMPORTANT]
 > Une action de collaboration demandée ne constitue pas une autorisation supplémentaire. Les agents doivent toujours respecter le périmètre de la tâche de l'utilisateur et évaluer indépendamment les commandes avant de les exécuter. Ne placez aucun secret dans les tours, manifestes, signaux ou fichiers d'état.
 
-<a id="license"></a>
+<a id="readme-license"></a>
 
 ## Licence
 
