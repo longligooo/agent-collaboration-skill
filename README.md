@@ -1,4 +1,4 @@
-<a id="top"></a>
+<a name="top"></a>
 
 <h1 align="center">Agent Collaboration Skill</h1>
 
@@ -48,7 +48,7 @@ No vendor API or background service is required.
 
 </details>
 
-<a id="readme-installation"></a>
+<a name="readme-installation"></a>
 
 ## Installation
 
@@ -84,13 +84,13 @@ For Cursor or tools that use project instructions, point a project rule or
 `AGENTS.md` entry to `SKILL.md`. Keep only one canonical copy of the protocol.
 See [Tool Adapters](references/tool-adapters.md) for details.
 
-<a id="readme-quick-start"></a>
+<a name="readme-quick-start"></a>
 
 ## Quick Start
 
 ### 1. Prepare the spec and ticket
 
-<a id="readme-tickets"></a>
+<a name="readme-tickets"></a>
 
 #### Tickets
 
@@ -169,7 +169,7 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
 > `INVALID` decisions must not create files or modify business code. Terminal
 > signals must follow their requested acknowledgement or closure action.
 
-<a id="readme-workflow"></a>
+<a name="readme-workflow"></a>
 
 ## How collaboration flows
 
@@ -215,7 +215,7 @@ Typical use cases:
 
 </details>
 
-<a id="readme-automatic-multi-round-collaboration"></a>
+<a name="readme-automatic-multi-round-collaboration"></a>
 
 ## Automatic Multi-Round Collaboration
 
@@ -245,7 +245,7 @@ through Git with `--agents backend --git-sync`. `--git-sync` publishes `.ai-coll
 [Tool Adapters](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)
 for the configuration format and safety limits.
 
-<a id="readme-local-web-ui"></a>
+<a name="readme-local-web-ui"></a>
 
 ## Local Web UI
 
@@ -259,7 +259,7 @@ It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes t
 
 Run `python scripts/collab.py --help` for command options.
 
-<a id="readme-reference"></a>
+<a name="readme-reference"></a>
 
 ## Reference
 
@@ -343,7 +343,7 @@ tests/test_ui.py               Local web UI registry, views, and single-process 
 
 </details>
 
-<a id="readme-validation"></a>
+<a name="readme-validation"></a>
 
 ## Validation
 
@@ -357,7 +357,7 @@ The tests cover publication, inspection, acknowledgement, duplicate detection,
 terminal signals, immutable rounds, safe repository paths, signal identity,
 and unattended multi-round runs of the watcher, including its limits and Git sync.
 
-<a id="readme-security-and-scope"></a>
+<a name="readme-security-and-scope"></a>
 
 ## Security And Scope
 
@@ -366,7 +366,7 @@ and unattended multi-round runs of the watcher, including its limits and Git syn
 > still respect the user's task scope and independently evaluate commands before
 > execution. Do not place secrets in turns, manifests, signals, or state files.
 
-<a id="readme-license"></a>
+<a name="readme-license"></a>
 
 ## License
 

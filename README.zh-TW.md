@@ -1,4 +1,4 @@
-<a id="top"></a>
+<a name="top"></a>
 
 <h1 align="center">Agent Collaboration Skill</h1>
 
@@ -43,7 +43,7 @@ AI 程式設計工具通常各自保存對話狀態，這使跨工具協作變�
 
 </details>
 
-<a id="readme-installation"></a>
+<a name="readme-installation"></a>
 
 ## 安裝
 
@@ -74,13 +74,13 @@ git clone https://github.com/longligooo/agent-collaboration-skill.git
 
 對於 Cursor 或使用專案指示的工具，在專案規則或 `AGENTS.md` 項目中指向 `SKILL.md`。協定只保留一份權威副本。詳見[工具配接器](references/tool-adapters.md)。
 
-<a id="readme-quick-start"></a>
+<a name="readme-quick-start"></a>
 
 ## 快速開始
 
 ### 1. 準備規格與任務票
 
-<a id="readme-tickets"></a>
+<a name="readme-tickets"></a>
 
 #### 任務票
 
@@ -150,7 +150,7 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
 > [!IMPORTANT]
 > 只有 `NEW` 判定應產生回覆。`EMPTY`、`DUPLICATE` 和 `INVALID` 判定不得建立檔案或修改業務程式碼。終止訊號必須依其要求執行確認或結束操作。
 
-<a id="readme-workflow"></a>
+<a name="readme-workflow"></a>
 
 ## 協作如何流轉
 
@@ -192,7 +192,7 @@ flowchart LR
 
 </details>
 
-<a id="readme-automatic-multi-round-collaboration"></a>
+<a name="readme-automatic-multi-round-collaboration"></a>
 
 ## 自動多回合協作
 
@@ -211,7 +211,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 
 當討論串結束、出現 `STOP` 檔案，或達到回合數、喚醒次數或重試次數上限時，監看程式會停止。代理輸出寫入 `.ai-collab/logs/`。不同機器上的參與者可以透過 `--agents backend --git-sync` 使用 Git 共用討論串。`--git-sync` 只發布 `.ai-collab/threads/`，且只能由人類啟用。除非人類明確要求，否則參與者不提交產品程式碼。無人值守執行前，請檢查產生的 `.ai-collab/wake.json` 權限。設定格式和安全限制詳見[工具配接器](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)。
 
-<a id="readme-local-web-ui"></a>
+<a name="readme-local-web-ui"></a>
 
 ## 本機 Web UI
 
@@ -225,7 +225,7 @@ python scripts/collab.py ui --root .
 
 執行 `python scripts/collab.py --help` 查看指令選項。
 
-<a id="readme-reference"></a>
+<a name="readme-reference"></a>
 
 ## 參考資料
 
@@ -306,7 +306,7 @@ tests/test_ui.py               本機 Web UI 的儲存庫註冊、檢視與單�
 
 </details>
 
-<a id="readme-validation"></a>
+<a name="readme-validation"></a>
 
 ## 驗證
 
@@ -318,14 +318,14 @@ python -m unittest discover -s tests -v
 
 測試涵蓋發布、檢查、確認、重複偵測、終止訊號、不可修改的回合、安全的儲存庫路徑、訊號身分，以及監看程式的無人值守多回合執行（包括其限制和 Git 同步）。
 
-<a id="readme-security-and-scope"></a>
+<a name="readme-security-and-scope"></a>
 
 ## 安全與範圍
 
 > [!IMPORTANT]
 > 要求執行某項協作操作並不代表獲得額外授權。代理仍須遵守使用者的任務範圍，並在執行指令前獨立評估。不要將機密資訊放入回合、資訊清單、訊號或狀態檔案。
 
-<a id="readme-license"></a>
+<a name="readme-license"></a>
 
 ## 授權條款
 

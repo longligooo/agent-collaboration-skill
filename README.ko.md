@@ -1,4 +1,4 @@
-<a id="top"></a>
+<a name="top"></a>
 
 <h1 align="center">Agent Collaboration Skill</h1>
 
@@ -43,7 +43,7 @@ AI 코딩 도구는 일반적으로 각자의 대화 상태를 유지합니다. 
 
 </details>
 
-<a id="readme-installation"></a>
+<a name="readme-installation"></a>
 
 ## 설치
 
@@ -74,13 +74,13 @@ git clone https://github.com/longligooo/agent-collaboration-skill.git
 
 Cursor 또는 프로젝트 지침을 사용하는 도구에서는 프로젝트 규칙이나 `AGENTS.md` 항목이 `SKILL.md`를 가리키도록 합니다. 프로토콜의 기준 사본은 하나만 유지하세요. 자세한 내용은 [도구 어댑터](references/tool-adapters.md)를 참고하세요.
 
-<a id="readme-quick-start"></a>
+<a name="readme-quick-start"></a>
 
 ## 빠른 시작
 
 ### 1. 명세와 티켓 준비
 
-<a id="readme-tickets"></a>
+<a name="readme-tickets"></a>
 
 #### 티켓
 
@@ -150,7 +150,7 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
 > [!IMPORTANT]
 > 판정이 `NEW`인 경우에만 응답을 생성해야 합니다. `EMPTY`, `DUPLICATE`, `INVALID` 판정에서는 파일을 생성하거나 비즈니스 코드를 수정해서는 안 됩니다. 종료 신호에는 요청된 수신 확인 또는 종료 동작을 따라야 합니다.
 
-<a id="readme-workflow"></a>
+<a name="readme-workflow"></a>
 
 ## 협업 진행 흐름
 
@@ -192,7 +192,7 @@ Codex, Claude Code, Cursor 등의 코딩 에이전트가 공유 저장소를 통
 
 </details>
 
-<a id="readme-automatic-multi-round-collaboration"></a>
+<a name="readme-automatic-multi-round-collaboration"></a>
 
 ## 여러 라운드의 자동 협업
 
@@ -211,7 +211,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 
 감시기는 스레드가 끝나거나, `STOP` 파일이 생기거나, 라운드 수, 실행 횟수 또는 재시도 횟수 제한에 도달하면 멈춥니다. 에이전트 출력은 `.ai-collab/logs/`에 기록됩니다. 서로 다른 컴퓨터의 참여자는 `--agents backend --git-sync`를 사용하여 Git을 통해 스레드를 공유할 수 있습니다. `--git-sync`는 `.ai-collab/threads/`만 게시하며, 사람만 이 기능을 켤 수 있습니다. 사람이 명시적으로 요청하지 않는 한 참여자는 제품 코드를 커밋하지 않습니다. 무인 실행 전에 생성된 `.ai-collab/wake.json`의 권한을 검토하세요. 설정 형식과 안전 제한은 [도구 어댑터](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)를 참고하세요.
 
-<a id="readme-local-web-ui"></a>
+<a name="readme-local-web-ui"></a>
 
 ## 로컬 웹 UI
 
@@ -225,7 +225,7 @@ Windows, macOS, Linux에서 `127.0.0.1:23451`에 바인딩됩니다. 명령은 �
 
 명령 옵션은 `python scripts/collab.py --help`로 확인할 수 있습니다.
 
-<a id="readme-reference"></a>
+<a name="readme-reference"></a>
 
 ## 참고 자료
 
@@ -306,7 +306,7 @@ tests/test_ui.py               로컬 웹 UI 등록, 화면, 단일 프로세스
 
 </details>
 
-<a id="readme-validation"></a>
+<a name="readme-validation"></a>
 
 ## 검증
 
@@ -318,14 +318,14 @@ python -m unittest discover -s tests -v
 
 테스트는 게시, 수신함 확인, 수신 확인, 중복 감지, 종료 신호, 변경 불가능한 라운드, 안전한 저장소 경로, 신호 식별, 감시기의 무인 다중 라운드 실행을 다루며, 감시기의 제한과 Git 동기화도 포함합니다.
 
-<a id="readme-security-and-scope"></a>
+<a name="readme-security-and-scope"></a>
 
 ## 보안 및 작업 범위
 
 > [!IMPORTANT]
 > 협업 동작에 대한 요청이 추가 권한을 부여하는 것은 아닙니다. 에이전트는 여전히 사용자의 작업 범위를 준수하고 실행 전에 명령을 독립적으로 평가해야 합니다. 턴, 매니페스트, 신호 또는 상태 파일에 비밀 정보를 넣지 마세요.
 
-<a id="readme-license"></a>
+<a name="readme-license"></a>
 
 ## 라이선스
 
