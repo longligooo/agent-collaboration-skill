@@ -1,12 +1,20 @@
 # Agent Collaboration Skill
 
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
+
+**Cross-tool, multi-agent collaboration for Codex, Claude Code, Cursor, and other AI coding agents.**
+
 A vendor-neutral skill and file protocol for durable collaboration between AI
-coding agents and human participants.
+coding agents and human participants, using shared Markdown and JSON files
+instead of a vendor-specific service. Includes a Python CLI, an optional
+automatic wake-up runner, and a local web UI.
 
 Use it when Codex, Claude Code, Cursor, or another coding agent needs to discuss
 a design, challenge a proposal, hand off implementation, review work, verify
 results, record a decision, or close a multi-round task through a shared
 repository.
+
+[Installation](#installation) · [Quick start](#quick-start) · [Automatic collaboration](#automatic-multi-round-collaboration) · [Examples](references/examples.md)
 
 ## Why This Exists
 
@@ -36,6 +44,14 @@ No vendor API or background service is required.
 
 The canonical turn kinds are `DISCUSSION`, `PROPOSAL`, `CHALLENGE`, `REVISION`,
 `IMPLEMENTATION`, `REVIEW`, `VERIFICATION`, `DECISION`, and `CLOSURE`.
+
+Typical use cases:
+
+| Use case | Example |
+| --- | --- |
+| Architecture discussion | Have one agent propose a design and another challenge its assumptions before deciding. |
+| Implementation handoff and code review | Hand off an implementation, track review findings across revisions, then verify the fixes. |
+| Independent verification | Ask another agent to reproduce test results or check a claim against repository evidence. |
 
 ## Tickets
 
@@ -103,6 +119,9 @@ See [Tool Adapters](references/tool-adapters.md) for details.
 ## Quick Start
 
 Write the spec and the ticket first. Then initialize a collaboration thread from the target repository. The objective names that ticket:
+
+`/path/to/agent-collaboration` below means the location where you installed this
+skill. Run these commands from the repository you want the agents to work on.
 
 ```bash
 python /path/to/agent-collaboration/scripts/collab.py init \
