@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#readme-installation">설치</a> · <a href="#readme-quick-start">빠른 시작</a> · <a href="#readme-workflow">협업 진행 흐름</a> · <a href="#readme-automatic-multi-round-collaboration">자동 협업</a> · <a href="#readme-reference">참고 자료</a>
+  <a href="#readme-installation">설치</a> · <a href="#readme-quick-start">빠른 시작</a> · <a href="#readme-workflow">협업 진행 흐름</a> · <a href="#readme-automatic-multi-round-collaboration">자동 협업</a> · <a href="#readme-local-web-ui">웹 UI</a> · <a href="#readme-reference">참고 자료</a>
 </p>
 
 AI 코딩 에이전트와 사람이 지속적으로 협업하고 기록을 남길 수 있도록 하는, 특정 공급업체에 종속되지 않는 스킬과 파일 프로토콜입니다. 공급업체 전용 서비스 대신 공유 Markdown 및 JSON 파일을 사용합니다. Python CLI, 에이전트를 자동으로 깨우는 선택적 실행기, 로컬 웹 UI를 포함합니다.
@@ -214,6 +214,16 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 <a name="readme-local-web-ui"></a>
 
 ## 로컬 웹 UI
+
+저장소에 포함된 로컬 웹 UI를 실제로 실행하고, 가상의 데모 프로젝트와 협업 턴을 채워 촬영한 화면입니다. 현재 인터페이스는 중국어이며, 외부 에이전트를 실제 호출해 만든 대화가 아닙니다.
+
+**프로젝트 간 스레드: 참여자, 대기 중인 작업, 서로 다른 협업 상태를 한눈에 확인합니다.**
+
+![프로젝트 두 개의 가상 협업 작업 세 개가 진행 중, 동의됨, 준비됨 상태로 표시된 로컬 웹 UI 스레드 목록](docs/images/web-ui-threads.jpg)
+
+**스레드 상세: 수신자, 검토 상태, 제안부터 수정까지의 이력을 확인합니다.**
+
+![가상의 설정 검토에서 제안, 검토, 수정 턴을 보여 주는 로컬 웹 UI 스레드 상세](docs/images/web-ui-thread-detail.jpg)
 
 다음 명령을 실행하기 전까지 웹 UI는 꺼져 있습니다.
 

@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#readme-installation">Install</a> · <a href="#readme-quick-start">Quick start</a> · <a href="#readme-workflow">How collaboration flows</a> · <a href="#readme-automatic-multi-round-collaboration">Automation</a> · <a href="#readme-reference">Reference</a>
+  <a href="#readme-installation">Install</a> · <a href="#readme-quick-start">Quick start</a> · <a href="#readme-workflow">How collaboration flows</a> · <a href="#readme-automatic-multi-round-collaboration">Automation</a> · <a href="#readme-local-web-ui">Web UI</a> · <a href="#readme-reference">Reference</a>
 </p>
 
 A vendor-neutral skill and file protocol for durable collaboration between AI
@@ -248,6 +248,16 @@ for the configuration format and safety limits.
 <a name="readme-local-web-ui"></a>
 
 ## Local Web UI
+
+Real screenshots of the bundled local Web UI, populated with synthetic demo projects and collaboration turns. The current interface is in Chinese; these examples do not represent conversations run by external agents.
+
+**Threads across projects — participants, pending work, and mixed workflow states.**
+
+![Local Web UI thread list showing three synthetic collaboration tasks across two projects, with open, agreed, and ready states](docs/images/web-ui-threads.jpg)
+
+**Thread detail — recipients, review status, and the proposal-to-revision history.**
+
+![Local Web UI thread detail showing a synthetic configuration review with proposal, review, and revision turns](docs/images/web-ui-thread-detail.jpg)
 
 The web UI stays off until someone runs:
 

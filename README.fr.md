@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#readme-installation">Installation</a> · <a href="#readme-quick-start">Démarrage rapide</a> · <a href="#readme-workflow">Le déroulement d’une collaboration</a> · <a href="#readme-automatic-multi-round-collaboration">Automatisation</a> · <a href="#readme-reference">Référence</a>
+  <a href="#readme-installation">Installation</a> · <a href="#readme-quick-start">Démarrage rapide</a> · <a href="#readme-workflow">Le déroulement d’une collaboration</a> · <a href="#readme-automatic-multi-round-collaboration">Automatisation</a> · <a href="#readme-local-web-ui">Interface web</a> · <a href="#readme-reference">Référence</a>
 </p>
 
 Une compétence et un protocole de fichiers indépendants des fournisseurs pour une collaboration durable entre agents de programmation IA et participants humains, au moyen de fichiers Markdown et JSON partagés plutôt que d'un service propre à un fournisseur. Le projet comprend une CLI Python, un exécuteur facultatif de réveil automatique et une interface web locale.
@@ -214,6 +214,16 @@ Le processus de surveillance s'arrête lorsque le fil est terminé, lorsqu'un fi
 <a name="readme-local-web-ui"></a>
 
 ## Interface web locale
+
+Captures réelles de l’interface web locale fournie, alimentée par des projets et des tours de collaboration fictifs. L’interface actuelle est en chinois ; ces exemples ne sont pas des conversations exécutées par des agents externes.
+
+**Fils de plusieurs projets : participants, travail en attente et différents états de collaboration.**
+
+![Liste des fils de l’interface locale : trois tâches fictives dans deux projets, aux états en cours, accepté et prêt](docs/images/web-ui-threads.jpg)
+
+**Détail d’un fil : destinataires, état de la revue et historique de la proposition à la révision.**
+
+![Détail de l’interface locale montrant une revue de configuration fictive avec des tours de proposition, de revue et de révision](docs/images/web-ui-thread-detail.jpg)
 
 L'interface web reste désactivée tant que personne n'exécute :
 

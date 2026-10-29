@@ -8,5 +8,8 @@ Status: ready-for-human
 ### D1 范围与交付
 只修改 longligooo/agent-collaboration-skill 的 README 展示及必要支持文件。保留功能、限制、命令和有效链接；不改仓库元数据，不改 PDF 仓库。基于最新 main 新建分支和 draft PR，不合并。
 
+### D2 补充真实 Web UI 截图
+按 2026-10-29 用户追加要求，为 README 添加实际 Web UI 截图。使用隔离、无敏感信息的合成演示数据，不使用生成式模型制作假界面；同步六语言说明。
+
 ## 范围之外
 修改协议行为、CLI、产品 UI、仓库设置，或引入营销性虚构数据。

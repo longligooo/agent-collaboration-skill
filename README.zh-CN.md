@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#readme-installation">安装</a> · <a href="#readme-quick-start">快速开始</a> · <a href="#readme-workflow">协作如何流转</a> · <a href="#readme-automatic-multi-round-collaboration">自动协作</a> · <a href="#readme-reference">参考资料</a>
+  <a href="#readme-installation">安装</a> · <a href="#readme-quick-start">快速开始</a> · <a href="#readme-workflow">协作如何流转</a> · <a href="#readme-automatic-multi-round-collaboration">自动协作</a> · <a href="#readme-local-web-ui">Web UI</a> · <a href="#readme-reference">参考资料</a>
 </p>
 
 一套不依赖特定厂商的技能与文件协议，通过共享的 Markdown 和 JSON 文件，而不是厂商专有服务，让 AI 编程智能体与人类参与者开展持久、可追溯的协作。提供 Python CLI、可选的自动唤醒运行器和本地 Web UI。
@@ -214,6 +214,16 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 <a name="readme-local-web-ui"></a>
 
 ## 本地 Web UI
+
+以下为仓库自带本地 Web UI 的真实截图，使用合成的演示项目和协作回合填充。当前界面为中文；这些示例不代表实际调用外部智能体生成的对话。
+
+**跨项目线程：一眼查看参与者、待处理事项和不同协作状态。**
+
+![本地 Web UI 线程列表，展示两个演示项目中的三条合成协作任务，分别处于进行中、已同意和就绪状态](docs/images/web-ui-threads.jpg)
+
+**线程详情：查看接收者、审查状态，以及从提案到修订的完整记录。**
+
+![本地 Web UI 线程详情，展示合成配置审查中的提案、审查和修订回合](docs/images/web-ui-thread-detail.jpg)
 
 在有人运行以下命令之前，Web UI 不会启动：
 

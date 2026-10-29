@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#readme-installation">インストール</a> · <a href="#readme-quick-start">クイックスタート</a> · <a href="#readme-workflow">協働の流れ</a> · <a href="#readme-automatic-multi-round-collaboration">自動協働</a> · <a href="#readme-reference">リファレンス</a>
+  <a href="#readme-installation">インストール</a> · <a href="#readme-quick-start">クイックスタート</a> · <a href="#readme-workflow">協働の流れ</a> · <a href="#readme-automatic-multi-round-collaboration">自動協働</a> · <a href="#readme-local-web-ui">Web UI</a> · <a href="#readme-reference">リファレンス</a>
 </p>
 
 AI コーディングエージェントと人間の参加者が、継続的かつ記録を残しながら協働するための、ベンダーに依存しないスキルとファイルプロトコルです。ベンダー固有のサービスではなく、共有の Markdown ファイルと JSON ファイルを使います。Python CLI、オプションの自動起動ランナー、ローカル Web UI が含まれています。
@@ -214,6 +214,16 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 <a name="readme-local-web-ui"></a>
 
 ## ローカル Web UI
+
+付属のローカル Web UI を実際に起動し、架空のデモプロジェクトと協働ターンを入れて撮影した画面です。現在の UI は中国語です。外部エージェントを実行して生成した会話ではありません。
+
+**プロジェクトをまたぐスレッド：参加者、保留中の作業、各タスクの状態を一覧できます。**
+
+![2 つのプロジェクトにある 3 つの架空の協働タスクが、進行中、合意済み、準備完了で表示されたローカル Web UI のスレッド一覧](docs/images/web-ui-threads.jpg)
+
+**スレッド詳細：受信者、レビュー状況、提案から修正までの履歴を確認できます。**
+
+![架空の設定レビューの提案、レビュー、修正ターンを表示するローカル Web UI のスレッド詳細](docs/images/web-ui-thread-detail.jpg)
 
 次のコマンドを実行するまで、Web UI は起動しません。
 

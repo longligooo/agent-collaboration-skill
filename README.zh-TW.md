@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#readme-installation">安裝</a> · <a href="#readme-quick-start">快速開始</a> · <a href="#readme-workflow">協作如何流轉</a> · <a href="#readme-automatic-multi-round-collaboration">自動協作</a> · <a href="#readme-reference">參考資料</a>
+  <a href="#readme-installation">安裝</a> · <a href="#readme-quick-start">快速開始</a> · <a href="#readme-workflow">協作如何流轉</a> · <a href="#readme-automatic-multi-round-collaboration">自動協作</a> · <a href="#readme-local-web-ui">Web UI</a> · <a href="#readme-reference">參考資料</a>
 </p>
 
 一套不依賴特定廠商的技能與檔案協定，透過共用的 Markdown 和 JSON 檔案，而非廠商專屬服務，讓 AI 程式設計代理與人類參與者進行持久、可追溯的協作。提供 Python CLI、選用的自動喚醒執行程式和本機 Web UI。
@@ -214,6 +214,16 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 <a name="readme-local-web-ui"></a>
 
 ## 本機 Web UI
+
+以下為儲存庫內建本機 Web UI 的真實截圖，使用合成的示範專案與協作回合填入。現階段介面為中文；這些範例不代表實際呼叫外部代理產生的對話。
+
+**跨專案執行緒：一眼查看參與者、待處理事項與不同協作狀態。**
+
+![本機 Web UI 執行緒列表，顯示兩個示範專案中的三項合成協作任務，分別處於進行中、已同意與就緒狀態](docs/images/web-ui-threads.jpg)
+
+**執行緒詳情：查看接收者、審查狀態，以及從提案到修訂的完整記錄。**
+
+![本機 Web UI 執行緒詳情，顯示合成設定審查中的提案、審查與修訂回合](docs/images/web-ui-thread-detail.jpg)
 
 在有人執行以下指令之前，Web UI 不會啟動：
 
