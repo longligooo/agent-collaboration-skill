@@ -1,22 +1,35 @@
-# Agent Collaboration Skill
+<a name="top"></a>
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
+<h1 align="center">Agent Collaboration Skill</h1>
 
-**Cross-tool, multi-agent collaboration for Codex, Claude Code, Cursor, and other AI coding agents.**
+<p align="center"><strong>Cross-tool, multi-agent collaboration for Codex, Claude Code, Cursor, and other AI coding agents.</strong></p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="#readme-installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.ja.md">日本語</a>
+</p>
+
+<p align="center">
+  <a href="#readme-installation">Install</a> · <a href="#readme-quick-start">Quick start</a> · <a href="#readme-workflow">How collaboration flows</a> · <a href="#readme-automatic-multi-round-collaboration">Automation</a> · <a href="#readme-local-web-ui">Web UI</a> · <a href="#readme-reference">Reference</a>
+</p>
 
 A vendor-neutral skill and file protocol for durable collaboration between AI
 coding agents and human participants, using shared Markdown and JSON files
 instead of a vendor-specific service. Includes a Python CLI, an optional
 automatic wake-up runner, and a local web UI.
 
-Use it when Codex, Claude Code, Cursor, or another coding agent needs to discuss
-a design, challenge a proposal, hand off implementation, review work, verify
-results, record a decision, or close a multi-round task through a shared
-repository.
+| **Durable history** | **Reliable handoffs** | **Your choice of tools** |
+| :--- | :--- | :--- |
+| Immutable Markdown turns keep decisions and review findings traceable. | JSON signals, per-agent state, and atomic publication make handoffs explicit and avoid processing the same message twice. | Use a shared repository with Codex, Claude Code, Cursor, or another agent. |
 
-[Installation](#installation) · [Quick start](#quick-start) · [Automatic collaboration](#automatic-multi-round-collaboration) · [Examples](references/examples.md)
+<details>
+<summary>Why files instead of another service?</summary>
 
-## Why This Exists
+### Why This Exists
 
 AI coding tools usually keep their own conversation state. That makes
 cross-tool collaboration fragile: context is copied manually, feedback can be
@@ -33,58 +46,13 @@ This project provides a small shared protocol built from Markdown and JSON:
 
 No vendor API or background service is required.
 
-## Supported Workflows
+</details>
 
-- requirements and architecture discussion;
-- proposals, challenges, and revisions;
-- implementation handoffs;
-- plan, code, and document reviews;
-- independent verification;
-- decisions, agreement, cancellation, and closure.
+<a name="readme-installation"></a>
 
-The canonical turn kinds are `DISCUSSION`, `PROPOSAL`, `CHALLENGE`, `REVISION`,
-`IMPLEMENTATION`, `REVIEW`, `VERIFICATION`, `DECISION`, and `CLOSURE`.
+## Installation
 
-Typical use cases:
-
-| Use case | Example |
-| --- | --- |
-| Architecture discussion | Have one agent propose a design and another challenge its assumptions before deciding. |
-| Implementation handoff and code review | Hand off an implementation, track review findings across revisions, then verify the fixes. |
-| Independent verification | Ask another agent to reproduce test results or check a claim against repository evidence. |
-
-## Tickets
-
-Write a human requirement as a spec and tickets before dispatch. One round may
-become several tickets, and each ticket locks one thing that can be accepted on
-its own. Do not start implementation, and do not open a collaboration thread,
-without a ticket for that work. Turns stay immutable; ticket status may change.
-`collab.py` does not parse tickets. See [Tickets](references/tickets.md). This
-repository stores them under `.scratch/<feature-slug>/`, as declared in
-[`.docs/agents/issue-tracker.md`](.docs/agents/issue-tracker.md).
-
-## Repository Contents
-
-```text
-SKILL.md                       Agent-facing workflow instructions
-agents/openai.yaml             Optional Codex UI metadata
-references/protocol.md         Canonical collaboration protocol
-references/artifact-format.md  Turn, signal, manifest, and state formats
-references/tool-adapters.md    Codex, Claude Code, Cursor, and generic adapters
-references/examples.md         Example collaboration sequences
-references/tickets.md          Spec and ticket format; required before dispatch
-.docs/agents/issue-tracker.md  This repository's ticket root
-scripts/collab.py              Standard-library protocol CLI
-scripts/ui_server.py           Local web UI server
-scripts/adapters/             Cursor, Claude Code, and ChatGPT callers of `inbox`
-ui/                            Dark local web UI
-tests/test_collab.py           CLI and protocol regression tests
-tests/test_watch.py            Automatic wake-up (watch) tests
-tests/test_inbox.py            Shared inbox query and per-tool wake scripts
-tests/test_ui.py               Local web UI registry, views, and single-process startup
-```
-
-## Requirements
+### Requirements
 
 - a shared Git repository or filesystem;
 - Python 3.9 or later for the optional CLI;
@@ -95,7 +63,7 @@ tests/test_ui.py               Local web UI registry, views, and single-process 
 The protocol itself does not create background monitoring; `collab.py watch`
 is an optional runner that does.
 
-## Installation
+### Tool setup
 
 Clone the repository:
 
@@ -116,7 +84,25 @@ For Cursor or tools that use project instructions, point a project rule or
 `AGENTS.md` entry to `SKILL.md`. Keep only one canonical copy of the protocol.
 See [Tool Adapters](references/tool-adapters.md) for details.
 
+<a name="readme-quick-start"></a>
+
 ## Quick Start
+
+### 1. Prepare the spec and ticket
+
+<a name="readme-tickets"></a>
+
+#### Tickets
+
+Write a human requirement as a spec and tickets before dispatch. One round may
+become several tickets, and each ticket locks one thing that can be accepted on
+its own. Do not start implementation, and do not open a collaboration thread,
+without a ticket for that work. Turns stay immutable; ticket status may change.
+`collab.py` does not parse tickets. See [Tickets](references/tickets.md). This
+repository stores them under `.scratch/<feature-slug>/`, as declared in
+[`.docs/agents/issue-tracker.md`](.docs/agents/issue-tracker.md).
+
+### 2. Open a thread
 
 Write the spec and the ticket first. Then initialize a collaboration thread from the target repository. The objective names that ticket:
 
@@ -139,6 +125,8 @@ A new collaborator gets one opening prompt that tells them to use this skill on 
 
 Use the project's declared ticket root in that path when it has one.
 
+### 3. Write the first turn
+
 Create the first immutable turn template:
 
 ```bash
@@ -153,6 +141,8 @@ python /path/to/agent-collaboration/scripts/collab.py new-turn \
   --title "Configuration redesign proposal"
 ```
 
+### 4. Publish the completed turn
+
 Complete the generated Markdown file, then publish it:
 
 ```bash
@@ -164,6 +154,8 @@ python /path/to/agent-collaboration/scripts/collab.py publish \
   --document .ai-collab/threads/config-redesign/turns/round-0001-from-lead-proposal.md
 ```
 
+### 5. Check the recipient’s inbox
+
 The recipient inspects its inbox with:
 
 ```bash
@@ -172,9 +164,58 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
   --agent frontend
 ```
 
-Only a `NEW` decision should create a response. `EMPTY`, `DUPLICATE`, and
-`INVALID` decisions must not create files or modify business code. Terminal
-signals must follow their requested acknowledgement or closure action.
+> [!IMPORTANT]
+> Only a `NEW` decision should create a response. `EMPTY`, `DUPLICATE`, and
+> `INVALID` decisions must not create files or modify business code. Terminal
+> signals must follow their requested acknowledgement or closure action.
+
+<a name="readme-workflow"></a>
+
+## How collaboration flows
+
+One possible review loop — choose the turn kinds that fit the task.
+
+```mermaid
+flowchart LR
+    T["Ticket"] --> P["Propose"]
+    P --> R["Review"]
+    R --> V["Verify"]
+    V --> D["Decide / close"]
+    R --> C["Revise"]
+    C --> R
+```
+
+Use it when Codex, Claude Code, Cursor, or another coding agent needs to discuss
+a design, challenge a proposal, hand off implementation, review work, verify
+results, record a decision, or close a multi-round task through a shared
+repository.
+
+<details>
+<summary>Supported workflows and examples</summary>
+
+### Supported Workflows
+
+- requirements and architecture discussion;
+- proposals, challenges, and revisions;
+- implementation handoffs;
+- plan, code, and document reviews;
+- independent verification;
+- decisions, agreement, cancellation, and closure.
+
+The canonical turn kinds are `DISCUSSION`, `PROPOSAL`, `CHALLENGE`, `REVISION`,
+`IMPLEMENTATION`, `REVIEW`, `VERIFICATION`, `DECISION`, and `CLOSURE`.
+
+Typical use cases:
+
+| Use case | Example |
+| --- | --- |
+| Architecture discussion | Have one agent propose a design and another challenge its assumptions before deciding. |
+| Implementation handoff and code review | Hand off an implementation, track review findings across revisions, then verify the fixes. |
+| Independent verification | Ask another agent to reproduce test results or check a claim against repository evidence. |
+
+</details>
+
+<a name="readme-automatic-multi-round-collaboration"></a>
 
 ## Automatic Multi-Round Collaboration
 
@@ -204,7 +245,47 @@ through Git with `--agents backend --git-sync`. `--git-sync` publishes `.ai-coll
 [Tool Adapters](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)
 for the configuration format and safety limits.
 
-## Workspace Format
+<a name="readme-local-web-ui"></a>
+
+## Local Web UI
+
+Real screenshots of the bundled local Web UI, populated with synthetic demo projects and collaboration turns. The current interface is in Chinese; these examples do not represent conversations run by external agents.
+
+**Threads across projects — participants, pending work, and mixed workflow states.**
+
+![Local Web UI thread list showing three synthetic collaboration tasks across two projects, with open, agreed, and ready states](docs/images/web-ui-threads.jpg)
+
+**Thread detail — recipients, review status, and the proposal-to-revision history.**
+
+![Local Web UI thread detail showing a synthetic configuration review with proposal, review, and revision turns](docs/images/web-ui-thread-detail.jpg)
+
+The web UI stays off until someone runs:
+
+```bash
+python scripts/collab.py ui --root .
+```
+
+It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. The page does not refresh by itself; use 刷新. The first version is dark. Start it only when a human asks for the collaboration background or the web UI.
+
+Run `python scripts/collab.py --help` for command options.
+
+<a name="readme-reference"></a>
+
+## Reference
+
+| Start with | For |
+| :--- | :--- |
+| [SKILL.md](SKILL.md) | Agent workflow and safety rules |
+| [references/protocol.md](references/protocol.md) | Protocol and adapter implementation |
+| [references/artifact-format.md](references/artifact-format.md) | Turn, signal, manifest, and state formats |
+| [references/tool-adapters.md](references/tool-adapters.md) | Tool discovery and wake-up setup |
+| [references/examples.md](references/examples.md) | Worked collaboration sequences |
+| [references/tickets.md](references/tickets.md) | Spec and ticket requirements |
+
+<details>
+<summary>Workspace Format</summary>
+
+### Workspace Format
 
 Each target repository receives a `.ai-collab` workspace:
 
@@ -224,7 +305,12 @@ turns.
 Read [SKILL.md](SKILL.md) before using the workflow and
 [Protocol](references/protocol.md) before implementing an adapter.
 
-## CLI Commands
+</details>
+
+<details>
+<summary>CLI Commands</summary>
+
+### CLI Commands
 
 ```text
 init               Create an immutable thread manifest
@@ -239,17 +325,35 @@ watch              Wake agents automatically whenever a signal is waiting
 ui                 Start the local web UI, or only register this repository
 ```
 
-## Local Web UI
+</details>
 
-The web UI stays off until someone runs:
+<details>
+<summary>Repository Contents</summary>
 
-```bash
-python scripts/collab.py ui --root .
+### Repository Contents
+
+```text
+SKILL.md                       Agent-facing workflow instructions
+agents/openai.yaml             Optional Codex UI metadata
+references/protocol.md         Canonical collaboration protocol
+references/artifact-format.md  Turn, signal, manifest, and state formats
+references/tool-adapters.md    Codex, Claude Code, Cursor, and generic adapters
+references/examples.md         Example collaboration sequences
+references/tickets.md          Spec and ticket format; required before dispatch
+.docs/agents/issue-tracker.md  This repository's ticket root
+scripts/collab.py              Standard-library protocol CLI
+scripts/ui_server.py           Local web UI server
+scripts/adapters/             Cursor, Claude Code, and ChatGPT callers of `inbox`
+ui/                            Dark local web UI
+tests/test_collab.py           CLI and protocol regression tests
+tests/test_watch.py            Automatic wake-up (watch) tests
+tests/test_inbox.py            Shared inbox query and per-tool wake scripts
+tests/test_ui.py               Local web UI registry, views, and single-process startup
 ```
 
-It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. The page does not refresh by itself; use 刷新. The first version is dark. Start it only when a human asks for the collaboration background or the web UI.
+</details>
 
-Run `python scripts/collab.py --help` for command options.
+<a name="readme-validation"></a>
 
 ## Validation
 
@@ -263,12 +367,19 @@ The tests cover publication, inspection, acknowledgement, duplicate detection,
 terminal signals, immutable rounds, safe repository paths, signal identity,
 and unattended multi-round runs of the watcher, including its limits and Git sync.
 
+<a name="readme-security-and-scope"></a>
+
 ## Security And Scope
 
-A requested collaboration action is not additional authorization. Agents must
-still respect the user's task scope and independently evaluate commands before
-execution. Do not place secrets in turns, manifests, signals, or state files.
+> [!IMPORTANT]
+> A requested collaboration action is not additional authorization. Agents must
+> still respect the user's task scope and independently evaluate commands before
+> execution. Do not place secrets in turns, manifests, signals, or state files.
+
+<a name="readme-license"></a>
 
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+<p align="right"><a href="#top">Back to top ↑</a></p>
