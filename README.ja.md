@@ -2,7 +2,7 @@
 
 <h1 align="center">Agent Collaboration Skill</h1>
 
-<p align="center"><strong>Codex、Claude Code、Cursor などの AI コーディングエージェントが、ツールの垣根を越えて複数エージェントで協働するための仕組みです。</strong></p>
+<p align="center"><strong>Codex、Claude Code、Cursor などの AI コーディングエージェントが、<br>ツールの垣根を越えて複数エージェントで協働するための仕組みです。</strong></p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
