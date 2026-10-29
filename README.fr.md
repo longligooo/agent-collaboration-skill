@@ -1,16 +1,32 @@
-# Agent Collaboration Skill
+<a id="top"></a>
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
+<h1 align="center">Agent Collaboration Skill</h1>
 
-**La collaboration multi-agents entre outils pour Codex, Claude Code, Cursor et d'autres agents de programmation IA.**
+<p align="center"><strong>La collaboration multi-agents entre outils pour Codex, Claude Code, Cursor et d'autres agents de programmation IA.</strong></p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB.svg" alt="Python 3.9+"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <strong>Français</strong> · <a href="README.ko.md">한국어</a> · <a href="README.ja.md">日本語</a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> · <a href="#quick-start">Démarrage rapide</a> · <a href="#automatic-multi-round-collaboration">Automatisation</a> · <a href="#reference">Référence</a>
+</p>
 
 Une compétence et un protocole de fichiers indépendants des fournisseurs pour une collaboration durable entre agents de programmation IA et participants humains, au moyen de fichiers Markdown et JSON partagés plutôt que d'un service propre à un fournisseur. Le projet comprend une CLI Python, un exécuteur facultatif de réveil automatique et une interface web locale.
 
-Utilisez-les lorsque Codex, Claude Code, Cursor ou un autre agent de programmation doit discuter d'une conception, contester une proposition, transmettre un travail d'implémentation, effectuer une revue, vérifier des résultats, consigner une décision ou clore une tâche à plusieurs tours au moyen d'un dépôt partagé.
+| **Historique durable** | **Transmissions fiables** | **Vos outils au choix** |
+| :--- | :--- | :--- |
+| Les tours Markdown immuables conservent la trace des décisions et des constats. | Signaux JSON, état par agent et publication atomique rendent les transmissions explicites et évitent les doublons. | Utilisez un dépôt partagé avec Codex, Claude Code, Cursor ou un autre agent. |
 
-[Installation](#installation) · [Démarrage rapide](#démarrage-rapide) · [Collaboration automatique](#collaboration-automatique-à-plusieurs-tours) · [Exemples](references/examples.md)
+<details>
+<summary>Pourquoi des fichiers plutôt qu’un autre service ?</summary>
 
-## Pourquoi ce projet existe
+### Pourquoi ce projet existe
 
 Les outils de programmation IA conservent généralement leur propre état de conversation. Cela fragilise la collaboration entre outils : le contexte est copié manuellement, les retours peuvent être écrasés et des interrogations répétées peuvent entraîner le traitement du même message deux fois.
 
@@ -25,51 +41,13 @@ Ce projet fournit un petit protocole partagé fondé sur Markdown et JSON :
 
 Aucune API de fournisseur ni aucun service en arrière-plan n'est nécessaire.
 
-## Flux de travail pris en charge
+</details>
 
-- discussions sur les exigences et l'architecture ;
-- propositions, contestations et révisions ;
-- transmissions de travaux d'implémentation ;
-- revues de plans, de code et de documents ;
-- vérification indépendante ;
-- décisions, accord, annulation et clôture.
+<a id="installation"></a>
 
-Les types de tours canoniques sont `DISCUSSION`, `PROPOSAL`, `CHALLENGE`, `REVISION`, `IMPLEMENTATION`, `REVIEW`, `VERIFICATION`, `DECISION` et `CLOSURE`.
+## Installation
 
-Cas d'utilisation typiques :
-
-| Cas d'utilisation | Exemple |
-| --- | --- |
-| Discussion d'architecture | Demander à un agent de proposer une conception et à un autre d'en remettre en question les hypothèses avant de décider. |
-| Transmission de l'implémentation et revue de code | Transmettre une implémentation, suivre les constats de revue au fil des révisions, puis vérifier les corrections. |
-| Vérification indépendante | Demander à un autre agent de reproduire les résultats des tests ou de vérifier une affirmation à partir des éléments présents dans le dépôt. |
-
-## Tickets
-
-Avant d'attribuer le travail, formalisez une exigence humaine sous forme de spécification et de tickets. Un même ensemble d'exigences peut donner lieu à plusieurs tickets, chacun définissant précisément un élément pouvant être accepté indépendamment. Ne commencez pas l'implémentation et n'ouvrez pas de fil de collaboration sans ticket correspondant au travail. Les tours restent immuables ; l'état des tickets peut changer. `collab.py` n'analyse pas les tickets. Consultez [Tickets](references/tickets.md). Ce dépôt les stocke sous `.scratch/<feature-slug>/`, comme indiqué dans [`.docs/agents/issue-tracker.md`](.docs/agents/issue-tracker.md).
-
-## Contenu du dépôt
-
-```text
-SKILL.md                       Instructions de travail destinées aux agents
-agents/openai.yaml             Métadonnées facultatives pour l'interface Codex
-references/protocol.md         Protocole de collaboration canonique
-references/artifact-format.md  Formats des tours, signaux, manifestes et états
-references/tool-adapters.md    Adaptateurs Codex, Claude Code, Cursor et génériques
-references/examples.md         Exemples de séquences de collaboration
-references/tickets.md          Format des spécifications et tickets ; requis avant attribution
-.docs/agents/issue-tracker.md   Racine des tickets de ce dépôt
-scripts/collab.py              CLI du protocole, utilisant la bibliothèque standard
-scripts/ui_server.py           Serveur de l'interface web locale
-scripts/adapters/              Appelants de `inbox` pour Cursor, Claude Code et ChatGPT
-ui/                           Interface web locale sombre
-tests/test_collab.py           Tests de non-régression de la CLI et du protocole
-tests/test_watch.py            Tests du réveil automatique (watch)
-tests/test_inbox.py            Requête commune de boîte de réception et scripts de réveil par outil
-tests/test_ui.py               Registre, vues et démarrage à processus unique de l'interface web locale
-```
-
-## Prérequis
+### Prérequis
 
 - un dépôt Git ou un système de fichiers partagé ;
 - Python 3.9 ou une version ultérieure pour la CLI facultative ;
@@ -78,7 +56,7 @@ tests/test_ui.py               Registre, vues et démarrage à processus unique 
 
 Le protocole lui-même ne met pas en place de surveillance en arrière-plan ; `collab.py watch` est un exécuteur facultatif qui remplit ce rôle.
 
-## Installation
+### Configuration des outils
 
 Clonez le dépôt :
 
@@ -96,7 +74,19 @@ Pour les outils prenant nativement en charge les compétences, copiez le dépôt
 
 Pour Cursor ou les outils utilisant des instructions de projet, faites pointer une règle de projet ou une entrée de `AGENTS.md` vers `SKILL.md`. Ne conservez qu'une seule copie canonique du protocole. Consultez [Adaptateurs d'outils](references/tool-adapters.md) pour plus de détails.
 
+<a id="quick-start"></a>
+
 ## Démarrage rapide
+
+### 1. Préparer la spécification et le ticket
+
+<a id="tickets"></a>
+
+#### Tickets
+
+Avant d'attribuer le travail, formalisez une exigence humaine sous forme de spécification et de tickets. Un même ensemble d'exigences peut donner lieu à plusieurs tickets, chacun définissant précisément un élément pouvant être accepté indépendamment. Ne commencez pas l'implémentation et n'ouvrez pas de fil de collaboration sans ticket correspondant au travail. Les tours restent immuables ; l'état des tickets peut changer. `collab.py` n'analyse pas les tickets. Consultez [Tickets](references/tickets.md). Ce dépôt les stocke sous `.scratch/<feature-slug>/`, comme indiqué dans [`.docs/agents/issue-tracker.md`](.docs/agents/issue-tracker.md).
+
+### 2. Ouvrir un fil
 
 Rédigez d'abord la spécification et le ticket. Initialisez ensuite un fil de collaboration depuis le dépôt cible. L'objectif désigne ce ticket :
 
@@ -118,6 +108,8 @@ Un nouveau collaborateur reçoit une seule invite de démarrage lui indiquant d'
 
 Si le projet déclare une racine pour ses tickets, utilisez-la dans ce chemin.
 
+### 3. Rédiger le premier tour
+
 Créez le premier modèle de tour immuable :
 
 ```bash
@@ -132,6 +124,8 @@ python /path/to/agent-collaboration/scripts/collab.py new-turn \
   --title "Configuration redesign proposal"
 ```
 
+### 4. Publier le tour complété
+
 Complétez le fichier Markdown généré, puis publiez-le :
 
 ```bash
@@ -143,6 +137,8 @@ python /path/to/agent-collaboration/scripts/collab.py publish \
   --document .ai-collab/threads/config-redesign/turns/round-0001-from-lead-proposal.md
 ```
 
+### 5. Inspecter la boîte du destinataire
+
 Le destinataire inspecte sa boîte de réception avec :
 
 ```bash
@@ -151,7 +147,52 @@ python /path/to/agent-collaboration/scripts/collab.py inspect \
   --agent frontend
 ```
 
-Seule une décision `NEW` doit donner lieu à une réponse. Les décisions `EMPTY`, `DUPLICATE` et `INVALID` ne doivent entraîner ni création de fichiers ni modification du code métier. Les signaux terminaux doivent être traités selon l'action demandée d'accusé de réception ou de clôture.
+> [!IMPORTANT]
+> Seule une décision `NEW` doit donner lieu à une réponse. Les décisions `EMPTY`, `DUPLICATE` et `INVALID` ne doivent entraîner ni création de fichiers ni modification du code métier. Les signaux terminaux doivent être traités selon l'action demandée d'accusé de réception ou de clôture.
+
+<a id="workflow"></a>
+
+## Le déroulement d’une collaboration
+
+Un exemple de boucle de revue : choisissez les types de tours adaptés à la tâche.
+
+```mermaid
+flowchart LR
+    T["Ticket"] --> P["Proposer"]
+    P --> R["Revoir"]
+    R --> V["Vérifier"]
+    V --> D["Décider / clore"]
+    R --> C["Réviser"]
+    C --> R
+```
+
+Utilisez-les lorsque Codex, Claude Code, Cursor ou un autre agent de programmation doit discuter d'une conception, contester une proposition, transmettre un travail d'implémentation, effectuer une revue, vérifier des résultats, consigner une décision ou clore une tâche à plusieurs tours au moyen d'un dépôt partagé.
+
+<details>
+<summary>Flux de travail et exemples</summary>
+
+### Flux de travail pris en charge
+
+- discussions sur les exigences et l'architecture ;
+- propositions, contestations et révisions ;
+- transmissions de travaux d'implémentation ;
+- revues de plans, de code et de documents ;
+- vérification indépendante ;
+- décisions, accord, annulation et clôture.
+
+Les types de tours canoniques sont `DISCUSSION`, `PROPOSAL`, `CHALLENGE`, `REVISION`, `IMPLEMENTATION`, `REVIEW`, `VERIFICATION`, `DECISION` et `CLOSURE`.
+
+Cas d'utilisation typiques :
+
+| Cas d'utilisation | Exemple |
+| --- | --- |
+| Discussion d'architecture | Demander à un agent de proposer une conception et à un autre d'en remettre en question les hypothèses avant de décider. |
+| Transmission de l'implémentation et revue de code | Transmettre une implémentation, suivre les constats de revue au fil des révisions, puis vérifier les corrections. |
+| Vérification indépendante | Demander à un autre agent de reproduire les résultats des tests ou de vérifier une affirmation à partir des éléments présents dans le dépôt. |
+
+</details>
+
+<a id="automatic-multi-round-collaboration"></a>
 
 ## Collaboration automatique à plusieurs tours
 
@@ -170,7 +211,37 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 
 Le processus de surveillance s'arrête lorsque le fil est terminé, lorsqu'un fichier `STOP` apparaît ou lorsqu'une limite de tours, de réveils ou de nouvelles tentatives est atteinte. La sortie des agents est écrite dans `.ai-collab/logs/`. Des participants sur des machines différentes peuvent partager un fil via Git avec `--agents backend --git-sync`. `--git-sync` ne publie que `.ai-collab/threads/`, et seul un humain peut l'activer. Les participants ne créent pas de commits du code produit, sauf demande explicite de l'humain. Examinez les permissions du fichier `.ai-collab/wake.json` généré avant une exécution sans supervision. Consultez [Adaptateurs d'outils](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch) pour le format de configuration et les limites de sécurité.
 
-## Format de l'espace de travail
+<a id="local-web-ui"></a>
+
+## Interface web locale
+
+L'interface web reste désactivée tant que personne n'exécute :
+
+```bash
+python scripts/collab.py ui --root .
+```
+
+Elle écoute sur `127.0.0.1:23451` sous Windows, macOS et Linux. La commande sonde d'abord ce port. Une seconde exécution enregistre le dépôt courant auprès de l'interface déjà en cours d'exécution. Ouvrez `http://127.0.0.1:23451/` pour voir tous les projets enregistrés, leurs fils et chaque participant dans les différents projets. La page ne s'actualise pas automatiquement ; utilisez 刷新 (« Actualiser »). La première version utilise un thème sombre. Ne la démarrez que lorsqu'un humain demande le service de collaboration en arrière-plan ou l'interface web.
+
+Exécutez `python scripts/collab.py --help` pour consulter les options des commandes.
+
+<a id="reference"></a>
+
+## Référence
+
+| Point de départ | Usage |
+| :--- | :--- |
+| [SKILL.md](SKILL.md) | Flux de travail et règles de sécurité des agents |
+| [references/protocol.md](references/protocol.md) | Protocole et implémentation des adaptateurs |
+| [references/artifact-format.md](references/artifact-format.md) | Formats des tours, signaux, manifestes et états |
+| [references/tool-adapters.md](references/tool-adapters.md) | Découverte des outils et configuration du réveil |
+| [references/examples.md](references/examples.md) | Exemples de séquences de collaboration |
+| [references/tickets.md](references/tickets.md) | Exigences des spécifications et des tickets |
+
+<details>
+<summary>Format de l'espace de travail</summary>
+
+### Format de l'espace de travail
 
 Chaque dépôt cible reçoit un espace de travail `.ai-collab` :
 
@@ -187,7 +258,12 @@ Les tours sont la source de vérité. Les signaux sont des notifications rempla�
 
 Lisez [SKILL.md](SKILL.md) avant d'utiliser ce flux de travail, et le [Protocole](references/protocol.md) avant d'implémenter un adaptateur.
 
-## Commandes CLI
+</details>
+
+<details>
+<summary>Commandes CLI</summary>
+
+### Commandes CLI
 
 ```text
 init               Créer un manifeste de fil immuable
@@ -202,17 +278,35 @@ watch              Réveiller automatiquement les agents lorsqu'un signal est en
 ui                 Démarrer l'interface web locale ou seulement enregistrer ce dépôt
 ```
 
-## Interface web locale
+</details>
 
-L'interface web reste désactivée tant que personne n'exécute :
+<details>
+<summary>Contenu du dépôt</summary>
 
-```bash
-python scripts/collab.py ui --root .
+### Contenu du dépôt
+
+```text
+SKILL.md                       Instructions de travail destinées aux agents
+agents/openai.yaml             Métadonnées facultatives pour l'interface Codex
+references/protocol.md         Protocole de collaboration canonique
+references/artifact-format.md  Formats des tours, signaux, manifestes et états
+references/tool-adapters.md    Adaptateurs Codex, Claude Code, Cursor et génériques
+references/examples.md         Exemples de séquences de collaboration
+references/tickets.md          Format des spécifications et tickets ; requis avant attribution
+.docs/agents/issue-tracker.md   Racine des tickets de ce dépôt
+scripts/collab.py              CLI du protocole, utilisant la bibliothèque standard
+scripts/ui_server.py           Serveur de l'interface web locale
+scripts/adapters/              Appelants de `inbox` pour Cursor, Claude Code et ChatGPT
+ui/                           Interface web locale sombre
+tests/test_collab.py           Tests de non-régression de la CLI et du protocole
+tests/test_watch.py            Tests du réveil automatique (watch)
+tests/test_inbox.py            Requête commune de boîte de réception et scripts de réveil par outil
+tests/test_ui.py               Registre, vues et démarrage à processus unique de l'interface web locale
 ```
 
-Elle écoute sur `127.0.0.1:23451` sous Windows, macOS et Linux. La commande sonde d'abord ce port. Une seconde exécution enregistre le dépôt courant auprès de l'interface déjà en cours d'exécution. Ouvrez `http://127.0.0.1:23451/` pour voir tous les projets enregistrés, leurs fils et chaque participant dans les différents projets. La page ne s'actualise pas automatiquement ; utilisez 刷新 (« Actualiser »). La première version utilise un thème sombre. Ne la démarrez que lorsqu'un humain demande le service de collaboration en arrière-plan ou l'interface web.
+</details>
 
-Exécutez `python scripts/collab.py --help` pour consulter les options des commandes.
+<a id="validation"></a>
 
 ## Validation
 
@@ -224,10 +318,17 @@ python -m unittest discover -s tests -v
 
 Les tests couvrent la publication, l'inspection, les accusés de réception, la détection des doublons, les signaux terminaux, les tours immuables, la sécurité des chemins du dépôt, l'identité des signaux et les exécutions sans supervision à plusieurs tours du processus de surveillance, y compris ses limites et la synchronisation Git.
 
+<a id="security-and-scope"></a>
+
 ## Sécurité et périmètre
 
-Une action de collaboration demandée ne constitue pas une autorisation supplémentaire. Les agents doivent toujours respecter le périmètre de la tâche de l'utilisateur et évaluer indépendamment les commandes avant de les exécuter. Ne placez aucun secret dans les tours, manifestes, signaux ou fichiers d'état.
+> [!IMPORTANT]
+> Une action de collaboration demandée ne constitue pas une autorisation supplémentaire. Les agents doivent toujours respecter le périmètre de la tâche de l'utilisateur et évaluer indépendamment les commandes avant de les exécuter. Ne placez aucun secret dans les tours, manifestes, signaux ou fichiers d'état.
+
+<a id="license"></a>
 
 ## Licence
 
 Licence MIT. Consultez [LICENSE](LICENSE).
+
+<p align="right"><a href="#top">Retour en haut ↑</a></p>
