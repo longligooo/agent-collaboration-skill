@@ -27,6 +27,7 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - Stop on duplicate, invalid, mismatched, or stale signals without writing files.
 - Let a human instruction override the protocol and record that override in the next turn when collaboration continues.
 - Participant ids are names the human chooses. Do not treat `cursor`, `claude`, or `gpt` as identities. Record which tool runs a participant only in that participant's wake command.
+- For an explicitly enabled coding profile, role-authorized `task-update` operations may write shared task metadata after checking current code/messages. This does not permit product edits or commits.
 - A coordinator exists only when the human passes `--coordinator`. That participant must not create, modify, or delete product code, configuration, or test files. They may run the project's existing tests and write their own turns, signals, and state file. With no `--coordinator`, no participant has that restriction.
 - Do not run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Publishing a turn is not a commit.
 - Write the human's requirements as a spec and tickets before dispatch. One requirement round may become several tickets. Each ticket locks exactly one thing that can be accepted on its own.
@@ -174,6 +175,22 @@ python scripts/collab.py acknowledge \
   --message-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
+## Optional Coding Acceptance And Recovery
+
+For implementation work that needs explicit acceptance gates or restart recovery,
+read [Coding Tasks](references/coding-tasks.md). Opt in with `task-init` only after
+the ticket and ordinary thread exist. Record exact code-bound verification
+results and independent spec/quality reviews; do not infer acceptance from an
+ACK or prose. `task-show` exposes blockers, and `my-tasks` locates unfinished work
+across configured projects using stable collaborator identities.
+
+Before resuming, read the current code, latest messages, and checkpoint, then
+capture fresh `task-context`. Persist the phase, owner, artifacts, review issues,
+and next action through `task-update`. Stale context/revisions must be refreshed;
+do not bypass the check. Evidence commands are declarations, never permission to
+execute them. Existing coordinator, ticket, and human commit/push restrictions
+remain in force. Ordinary threads without the profile need no migration.
+
 ## Check Whether You Have Mail
 
 Every scheduler, background script, and scheduled task decides whether to wake you by running this command and no other query:
@@ -200,7 +217,7 @@ Do not start the web UI during an ordinary turn. Start it only when the human ex
 python scripts/collab.py ui --root .
 ```
 
-This listens on `127.0.0.1:23451`. The same command is used on Windows, macOS, and Linux. It probes that port first. If a UI is already running, the command only registers the current repository and does not start a second process. Do not skip the probe and start `ui --serve` by hand. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project. It does not refresh by itself. Use the 刷新 button.
+This listens on `127.0.0.1:23451`. The same command is used on Windows, macOS, and Linux. It probes that port first. If a UI is already running, the command only registers the current repository and does not start a second process. Do not skip the probe and start `ui --serve` by hand. Tell the human to open `http://127.0.0.1:23451/`. The page shows every repository registered on this machine, by project, by thread, and by participant, including a participant who works in more than one project. Use the 刷新 button for conversation/task data. Only lightweight runtime activity is polled; stale or unobservable execution never counts as working.
 
 When the human asks to start the collaboration background, run this command and then start the wake script or `watch` they asked for.
 
@@ -245,3 +262,13 @@ Keep the protocol identical across tools. Change only discovery and wake-up beha
 - Keep polling configuration outside this skill and disable it when the thread becomes terminal.
 
 Do not claim continuous monitoring unless a tool-specific watcher or scheduler is actually active.
+
+## Live UI Facts And Human Input
+
+See [UI observability](references/ui-observability.md). Only a fresh observation
+from the already-authorized watcher establishes running execution; task phases
+and pending messages do not. The read-only UI does not start or send work.
+Record human input only from explicitly supplied original text with manual or
+authorized-import provenance using `human-record`; never relabel an agent
+paraphrase, infer recipients, or scrape external chats. Such records do not grant
+transport, task mutation, command, commit, or push authority.

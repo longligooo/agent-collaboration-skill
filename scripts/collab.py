@@ -202,7 +202,7 @@ def require_fields(data: Dict[str, Any], fields: Sequence[str], label: str) -> N
 
 
 def load_manifest(root: Path, thread_id: str) -> Dict[str, Any]:
-    path = thread_directory(root, thread_id) / "thread.json"
+    path = resolve_repo_path(root, f".ai-collab/threads/{validate_id(thread_id, 'thread_id')}/thread.json", label="thread manifest")
     data = read_json(path, "thread manifest")
     require_fields(
         data,
@@ -337,6 +337,7 @@ def validate_turn(root: Path, path: Path, *, require_complete: bool) -> Dict[str
 def validate_signal(
     root: Path, path: Path, expected_agent: Optional[str] = None
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    path = resolve_repo_path(root, relative_path(root, path), must_exist=True, label="signal")
     signal = read_json(path, "signal")
     require_fields(
         signal,
@@ -408,7 +409,7 @@ def validate_signal(
 
 
 def read_state(root: Path, thread_id: str, agent: str) -> Dict[str, Any]:
-    path = thread_directory(root, thread_id) / "state" / f"{agent}.json"
+    path = resolve_repo_path(root, f".ai-collab/threads/{validate_id(thread_id, 'thread_id')}/state/{validate_id(agent, 'agent')}.json", label="agent state")
     if not path.exists():
         return {
             "protocol_version": PROTOCOL_VERSION,
@@ -577,7 +578,7 @@ def cmd_validate_artifact(args: argparse.Namespace) -> None:
 def list_thread_ids(root: Path, thread_id: Optional[str] = None) -> List[str]:
     if thread_id:
         return [validate_id(thread_id, "thread_id")]
-    threads_root = root / WORKSPACE_DIR / "threads"
+    threads_root = resolve_repo_path(root, f"{WORKSPACE_DIR}/threads", label="threads directory")
     if not threads_root.is_dir():
         return []
     return sorted(path.name for path in threads_root.iterdir() if path.is_dir())
@@ -710,7 +711,9 @@ def policy_suffix(root: Path, thread_id: str, agent: str) -> str:
             "You are the coordinator of this thread. Do not create, modify, or delete "
             "product code, configuration, or test files. You may run tests to check "
             "results. Write only your collaboration turn, the recipient signal, and your "
-            "own state file."
+            "own state file. For an explicitly enabled coding profile, authorized "
+            "task-update operations may also write shared collaboration metadata after "
+            "fresh task-show/task-context checks; never product files or commits."
         )
     return "\n" + "\n".join(lines)
 
@@ -807,6 +810,11 @@ def cmd_publish(args: argparse.Namespace) -> None:
         raise CollaborationError("turn thread or author does not match publish arguments")
     if args.requested_action and metadata["requested_action"] != args.requested_action:
         raise CollaborationError("requested action does not match turn metadata")
+
+    if __name__ == "__main__":
+        sys.modules.setdefault("collab", sys.modules[__name__])
+    import task_model
+    task_model.require_publishable(root, args.thread_id, metadata["status"])
 
     if args.in_message_id:
         verify_current_incoming(root, args.thread_id, agent, args.in_message_id)
@@ -1000,7 +1008,8 @@ def latest_turn_status(root: Path, thread_id: str) -> Optional[str]:
     if latest is None:
         return None
     try:
-        metadata, _ = parse_turn(latest[1])
+        path = resolve_repo_path(root, relative_path(root, latest[1]), must_exist=True, label="latest turn")
+        metadata, _ = parse_turn(path)
     except CollaborationError:
         return None
     status = metadata.get("status")
@@ -1154,15 +1163,21 @@ class Watcher:
         fields: Dict[str, Any] = {"agent": agent, "thread_id": item["thread_id"]}
         with log_path.open("w", encoding="utf-8") as log_file:
             try:
-                completed = subprocess.run(
+                import runtime_activity
+
+                completed = runtime_activity.run_observed(
                     command,
+                    root=self.root,
+                    thread_id=item["thread_id"],
+                    agent=agent,
+                    message_id=message["message_id"],
+                    log=relative_path(self.root, log_path),
                     cwd=self.root,
                     env=environment,
                     stdin=subprocess.DEVNULL,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     timeout=timeout,
-                    check=False,
                 )
                 fields["exit_code"] = completed.returncode
             except FileNotFoundError:
@@ -1479,6 +1494,14 @@ def build_parser() -> argparse.ArgumentParser:
     ui_parser.add_argument("--port", type=int, default=ui_server_port())
     ui_parser.add_argument("--serve", action="store_true", help="run the server in the foreground")
     ui_parser.set_defaults(handler=cmd_ui)
+    if __name__ == "__main__":
+        sys.modules.setdefault("collab", sys.modules[__name__])
+    import task_model
+    task_model.add_parsers(subparsers)
+    import task_discovery
+    task_discovery.add_parsers(subparsers)
+    import human_events
+    human_events.add_parsers(subparsers)
     return parser
 
 

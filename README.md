@@ -245,6 +245,17 @@ through Git with `--agents backend --git-sync`. `--git-sync` publishes `.ai-coll
 [Tool Adapters](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)
 for the configuration format and safety limits.
 
+<a name="readme-coding-tasks"></a>
+
+## Coding Task Acceptance And Recovery
+
+Opt in per thread to explicit acceptance criteria, version-bound verification
+evidence, independent spec/quality reviews, and durable recovery checkpoints.
+`my-tasks` finds unfinished work across configured projects using stable
+collaborator identities. Ordinary discussion and acknowledgement behavior remain
+unchanged; recorded commands are never automatically executed. See
+[Coding tasks](references/coding-tasks.md) for the CLI and shared read API.
+
 <a name="readme-local-web-ui"></a>
 
 ## Local Web UI
@@ -265,7 +276,7 @@ The web UI stays off until someone runs:
 python scripts/collab.py ui --root .
 ```
 
-It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. The page does not refresh by itself; use 刷新. The first version is dark. Start it only when a human asks for the collaboration background or the web UI.
+It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. Conversation/task data refreshes with 刷新. Only live runner activity is polled; expired or unobservable execution is never shown as working. The interface is dark. Start it only when a human asks for the collaboration background or the web UI.
 
 Run `python scripts/collab.py --help` for command options.
 
@@ -281,6 +292,8 @@ Run `python scripts/collab.py --help` for command options.
 | [references/tool-adapters.md](references/tool-adapters.md) | Tool discovery and wake-up setup |
 | [references/examples.md](references/examples.md) | Worked collaboration sequences |
 | [references/tickets.md](references/tickets.md) | Spec and ticket requirements |
+| [references/ui-observability.md](references/ui-observability.md) | Live execution, explicit human provenance, and read-only history APIs |
+| [references/coding-tasks.md](references/coding-tasks.md) | Optional coding acceptance gates, restart checkpoints, and my tasks |
 
 <details>
 <summary>Workspace Format</summary>
@@ -323,6 +336,12 @@ acknowledge        Mark the current signal as processed
 init-wake          Write a wake config template for the watcher
 watch              Wake agents automatically whenever a signal is waiting
 ui                 Start the local web UI, or only register this repository
+task-init          Opt an existing thread into the coding task profile
+task-context       Read current code and message fingerprints
+task-show          Read acceptance blockers and recovery checkpoint
+task-update        Record an explicit version-checked task operation
+identity-bind      Map a project participant to a stable collaborator identity
+my-tasks           Find unfinished/resumable tasks across configured projects
 ```
 
 </details>

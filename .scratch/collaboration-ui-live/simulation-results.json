@@ -1,0 +1,61 @@
+{
+  "synthetic": true,
+  "real_model_calls": 0,
+  "final_full_suite": {
+    "command": "python -m unittest discover -s tests -v",
+    "tests": 183,
+    "result": "passed",
+    "seconds": 41.149
+  },
+  "public_cli_invocations": 139,
+  "http_reads": 28,
+  "expected_rejections": 12,
+  "scenario_observations": [
+    {
+      "scenario": "acceptance/review/fix/ACK",
+      "observed": "Missing, actual exit-1 verifier and explicitly blocked synthetic check blocked; changed code made old evidence stale; rerun exit 0 plus two independent passes allowed acceptance; terminal ACK left acceptance intact and HTTP agreed",
+      "test": "test_simulated_collaboration_e2e.SimulatedCollaborationE2E.test_01_failed_review_fix_and_accept_through_public_cli"
+    },
+    {
+      "scenario": "identity + restart + duplicate/stale updates",
+      "observed": "Same-identity alias and former owner self-review rejected; fresh interpreter restored next action; exact replay wrote no bytes, changed replay/stale revision rejected; both code and message changes rejected old context",
+      "test": "test_simulated_collaboration_e2e.SimulatedCollaborationE2E.test_02_independence_restart_replay_and_latest_context"
+    },
+    {
+      "scenario": "cross-project my tasks",
+      "observed": "One stable person resolved builder/developer in two projects; exactly one actionable, one waiting-peer, one waiting-human; category filters and registered-project HTTP/CLI results matched",
+      "test": "test_simulated_collaboration_e2e.SimulatedCollaborationE2E.test_03_my_tasks_across_projects_and_three_classifications"
+    },
+    {
+      "scenario": "human provenance/no authority",
+      "observed": "Manual/import records immutable and originals-only; text mentioning touch/git push/accept executed nothing, sent no signals and changed no task/commit; HTTP retained original sender/recipient identities after rebinding",
+      "test": "test_simulated_collaboration_e2e.SimulatedCollaborationE2E.test_04_human_provenance_has_no_execution_or_transport_authority"
+    },
+    {
+      "scenario": "real scripted watcher + runtime API",
+      "observed": "Observed actual fake collaborator processes running then completed/failed(exit 7)/timed-out; successful actor published a CLI reply and consumed input, failed/timed-out actors left input NEW; expired/dead copied leases inactive",
+      "test": "test_simulated_collaboration_e2e.SimulatedCollaborationE2E.test_05_real_watcher_success_failure_timeout_and_inactive_leases"
+    }
+  ],
+  "declared_fixture_participants": [
+    "builder",
+    "builder-alias",
+    "lead",
+    "reviewer",
+    "successor",
+    "developer"
+  ],
+  "actual_watcher_actor": {
+    "local_id": "reviewer",
+    "stable_identity": "stable-reviewer",
+    "implementation": "synthetic_collaborator.py",
+    "sequential_runs": 3,
+    "modes": [
+      "complete",
+      "fail(exit 7)",
+      "timeout"
+    ],
+    "model": null
+  },
+  "reproduce": "COLLAB_E2E_REPORT=/tmp/collaboration-e2e.json python -m unittest discover -s tests -p test_simulated_collaboration_e2e.py -v"
+}

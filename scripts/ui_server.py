@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from urllib.parse import parse_qs
 
 import collab
 
@@ -69,7 +70,10 @@ def turn_summary(body: str) -> str:
 
 
 def tool_bindings(root: Path) -> Dict[str, str]:
-    path = root / collab.WORKSPACE_DIR / "wake.json"
+    try:
+        path = collab.resolve_repo_path(root, ".ai-collab/wake.json", label="wake config")
+    except collab.CollaborationError:
+        return {}
     if not path.is_file():
         return {}
     try:
@@ -106,6 +110,7 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
         "error": None,
     }
     try:
+        collab.resolve_repo_path(root, f".ai-collab/threads/{thread_id}", label="thread directory")
         manifest = collab.load_manifest(root, thread_id)
     except collab.CollaborationError as exc:
         record["error"] = str(exc)
@@ -120,9 +125,10 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
     if turns_dir.is_dir():
         for path in sorted(turns_dir.glob("round-*.md")):
             try:
-                metadata, body = collab.parse_turn(path)
+                safe_path = collab.resolve_repo_path(root, collab.relative_path(root, path), must_exist=True, label="turn document")
+                metadata, body = collab.parse_turn(safe_path)
             except collab.CollaborationError as exc:
-                turns.append({"document": collab.relative_path(root, path), "error": str(exc)})
+                turns.append({"document": path.relative_to(root).as_posix(), "error": str(exc)})
                 continue
             turns.append(
                 {
@@ -164,6 +170,13 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
                     "error": result.get("error"),
                 }
             )
+    try:
+        import ui_read_model
+        record = ui_read_model.thread_projection(root, thread_id, record)
+    except (collab.CollaborationError, OSError, ValueError, TypeError, KeyError) as exc:
+        record["projection_error"] = str(exc)
+        record["participant_details"] = []
+        record["coding_task"] = None
     return record
 
 
@@ -181,8 +194,19 @@ def scan_project(entry: Dict[str, Any]) -> Dict[str, Any]:
     if not root.is_dir():
         return project
     project["tools"] = tool_bindings(root)
+    try:
+        import task_discovery
+        project["identity_bindings"] = task_discovery.load_identities(root)
+    except collab.CollaborationError as exc:
+        project["identity_error"] = str(exc)
+        project["identity_bindings"] = None
     threads = []
-    for thread_id in collab.list_thread_ids(root):
+    try:
+        thread_ids = collab.list_thread_ids(root)
+    except collab.CollaborationError as exc:
+        project["error"] = str(exc)
+        return project
+    for thread_id in thread_ids:
         threads.append(scan_thread(root, thread_id, project))
     threads.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
     project["threads"] = threads
@@ -190,71 +214,74 @@ def scan_project(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def collaborator_records(projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Group by stable identity, preserving historical human identity snapshots."""
     people: Dict[str, Dict[str, Any]] = {}
-
-    def person(agent: str) -> Dict[str, Any]:
-        record = people.get(agent)
-        if record is None:
-            record = {
-                "id": agent,
-                "pending": 0,
-                "turns": 0,
-                "last_at": "",
-                "projects": [],
-                "threads": [],
-                "tools": [],
-            }
-            people[agent] = record
-        return record
-
     for project in projects:
-        if not project["available"]:
+        if not project["available"] or project.get("identity_error"):
             continue
+        bindings = project.get("identity_bindings") or {}
         for thread in project["threads"]:
+            actors = {(detail["agent"], detail["identity"]): detail["actor_type"]
+                      for detail in thread.get("participant_details", [])}
             involved = set(thread["participants"])
-            for turn in thread["turns"]:
-                if isinstance(turn.get("author"), str):
-                    involved.add(turn["author"])
+            involved.update(turn["author"] for turn in thread["turns"] if isinstance(turn.get("author"), str))
             for signal in thread["signals"]:
-                if isinstance(signal.get("from"), str):
-                    involved.add(signal["from"])
-                if isinstance(signal.get("to"), str):
-                    involved.add(signal["to"])
-            for agent in sorted(involved):
-                record = person(agent)
+                involved.update(signal[field] for field in ("from", "to") if isinstance(signal.get(field), str))
+            for agent in involved:
+                actors.setdefault((agent, bindings.get(agent, agent)), "agent")
+            for (agent, identity), actor_type in sorted(actors.items()):
+                record = people.setdefault(identity, {"id": identity, "identity": identity,
+                    "aliases": [], "actor_type": actor_type, "pending": 0, "turns": 0,
+                    "last_at": "", "projects": [], "threads": [], "tools": []})
+                alias = {"project_id": project["id"], "agent": agent}
+                if alias not in record["aliases"]:
+                    record["aliases"].append(alias)
+                if actor_type == "human":
+                    record["actor_type"] = "human"
                 if not any(item["id"] == project["id"] for item in record["projects"]):
                     record["projects"].append({"id": project["id"], "name": project["name"], "root": project["root"]})
-                tool = project["tools"].get(agent)
+                current_actor = identity == bindings.get(agent, agent)
+                tool = project["tools"].get(agent) if current_actor else None
                 if tool and tool not in record["tools"]:
                     record["tools"].append(tool)
-                pending = [
-                    signal
-                    for signal in thread["signals"]
-                    if signal.get("to") == agent and signal.get("decision") in ATTENTION
-                ]
+                pending = [signal for signal in thread["signals"] if current_actor
+                           and signal.get("to") == agent and signal.get("decision") in ATTENTION]
                 record["pending"] += len(pending)
-                authored = [turn for turn in thread["turns"] if turn.get("author") == agent and not turn.get("error")]
+                authored = [turn for turn in thread["turns"] if current_actor
+                            and turn.get("author") == agent and not turn.get("error")]
                 record["turns"] += len(authored)
                 for turn in authored:
-                    if (turn.get("created_at") or "") > record["last_at"]:
-                        record["last_at"] = turn["created_at"]
-                record["threads"].append(
-                    {
-                        "project_id": project["id"],
-                        "project_name": project["name"],
-                        "thread_id": thread["thread_id"],
-                        "topic": thread["topic"],
-                        "coordinator": thread["coordinator"],
+                    record["last_at"] = max(record["last_at"], turn.get("created_at") or "")
+                existing = next((item for item in record["threads"] if item["project_id"] == project["id"]
+                                 and item["thread_id"] == thread["thread_id"]), None)
+                if existing:
+                    existing["pending"] += len(pending)
+                    existing["participant"] = existing["participant"] or (current_actor and agent in thread["participants"])
+                else:
+                    record["threads"].append({"project_id": project["id"], "project_name": project["name"],
+                        "thread_id": thread["thread_id"], "topic": thread["topic"],
+                        "coordinator": thread["coordinator"], "coordinator_identity": thread.get("coordinator_identity"),
                         "participants": list(thread["participants"]),
-                        "participant": agent in thread["participants"],
-                        "pending": len(pending),
-                        "status": thread["status"],
-                        "started_at": thread.get("started_at") or "",
-                        "terminal": bool(thread.get("terminal")),
-                        "updated_at": thread["updated_at"],
-                    }
-                )
+                        "participant": current_actor and agent in thread["participants"],
+                        "pending": len(pending), "status": thread["status"],
+                        "started_at": thread.get("started_at") or "", "terminal": bool(thread.get("terminal")),
+                        "updated_at": thread["updated_at"]})
     return sorted(people.values(), key=lambda item: (-item["pending"], item["id"]))
+
+
+def thread_detail(project_identifier: str, thread_id: str, path: Optional[Path] = None) -> Dict[str, Any]:
+    collab.validate_id(thread_id, "thread_id")
+    registry = load_registry(path or registry_path())
+    matches = [entry for entry in registry["projects"] if project_id(str(Path(entry["root"]))) == project_identifier]
+    if len(matches) != 1:
+        raise collab.CollaborationError("unknown or ambiguous registered project")
+    root = collab.repository_root(matches[0]["root"])
+    project = {"id": project_identifier, "name": root.name, "root": str(root)}
+    record = scan_thread(root, thread_id, project)
+    if record.get("error") or record.get("projection_error"):
+        raise collab.CollaborationError(record.get("error") or record["projection_error"])
+    import ui_read_model
+    return {"project": project, "thread": ui_read_model.thread_projection(root, thread_id, record, include_history=True)}
 
 
 def snapshot(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -414,6 +441,53 @@ class CollaborationHandler(BaseHTTPRequestHandler):
         if path == "/api/snapshot":
             payload = snapshot()
             payload["port"] = self.server.server_address[1]
+            self.respond(200, payload)
+            return
+        if path in {"/api/thread", "/api/activity"}:
+            try:
+                query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+                if any(len(values) != 1 for values in query.values()):
+                    raise collab.CollaborationError("query parameters must occur once")
+                if path == "/api/activity":
+                    if query:
+                        raise collab.CollaborationError("activity does not accept query parameters")
+                    import runtime_activity
+                    import task_discovery
+                    payload = runtime_activity.activity_snapshot(task_discovery.registered_roots())
+                else:
+                    if set(query) != {"project_id", "thread_id"}:
+                        raise collab.CollaborationError("thread requires project_id and thread_id only")
+                    payload = thread_detail(query["project_id"][0], query["thread_id"][0])
+            except (collab.CollaborationError, OSError, ValueError, TypeError, KeyError) as exc:
+                self.respond(400, {"result": "ERROR", "error": str(exc)})
+                return
+            self.respond(200, payload)
+            return
+        if path == "/api/tasks":
+            # A read-only projection over configured projects. A URL cannot add
+            # arbitrary filesystem roots or mutate identities/checkpoints.
+            import task_discovery
+
+            try:
+                query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+                if set(query) - {"identity", "category", "include_terminal"}:
+                    raise collab.CollaborationError("unsupported tasks query parameter")
+                if any(len(values) != 1 for values in query.values()):
+                    raise collab.CollaborationError("tasks query parameters must occur once")
+                identity = query.get("identity", [""])[0]
+                if not identity:
+                    raise collab.CollaborationError("identity is required")
+                terminal = query.get("include_terminal", ["false"])[0]
+                if terminal not in {"true", "false", "1", "0"}:
+                    raise collab.CollaborationError("include_terminal must be true or false")
+                payload = task_discovery.query_tasks(
+                    task_discovery.registered_roots(), identity,
+                    include_terminal=terminal in {"true", "1"},
+                    category=query.get("category", [None])[0],
+                )
+            except (collab.CollaborationError, OSError, ValueError, TypeError) as exc:
+                self.respond(400, {"result": "ERROR", "error": str(exc)})
+                return
             self.respond(200, payload)
             return
         if path == "/favicon.ico":

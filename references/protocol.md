@@ -104,7 +104,9 @@ When the human does name one, that participant may read the repository and may w
 
 - turns they author;
 - signals the protocol tells them to publish;
-- their own state file.
+- their own state file;
+- role-authorized shared metadata through `task-update` for an explicitly enabled
+  [coding profile](coding-tasks.md), after fresh code/message checks.
 
 They must not create, modify, or delete product code, configuration, or test files, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. Checking includes running the project's existing tests and recording the commands and results. Running tests does not allow the coordinator to edit those tests or any other product file, and it does not allow any participant to commit. No file setting can grant the coordinator permission to edit product code.
 
