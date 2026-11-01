@@ -60,7 +60,7 @@ The web UI is off until a human asks to start the collaboration background or th
 python scripts/collab.py ui --root .
 ```
 
-The process binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. When that process is already up, the command registers the current repository and does not start another one. Do not start `ui --serve` directly in place of this command. The UI reads every registered repository on this machine and can show one participant across projects and threads. The page does not refresh by itself; use the 刷新 button.
+The process binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. When that process is already up, the command registers the current repository and does not start another one. Do not start `ui --serve` directly in place of this command. The UI reads every registered repository on this machine and can show one participant across projects and threads. Thread lists and the current conversation/task view refresh automatically; the 刷新 button remains available. Reading position and expanded messages are preserved. Threads are sorted across projects by latest activity.
 
 ## Shared Inbox Query
 
@@ -86,7 +86,7 @@ Cursor can keep a background script that resumes a conversation:
 CURSOR_CHAT_ID=<chat-id> sh scripts/adapters/cursor-wake.sh /path/to/repo lead
 ```
 
-`lead` is the participant name. The script calls `inbox --format prompt` for that name and, only when that exits 0, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with the printed prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`. The prompt tells the coordinator not to edit product code, allows every participant to run existing tests, and tells every participant not to commit.
+`lead` is the participant name. The script uses the same `inbox` query and prompt builder for that name and, only when attention is needed, runs `agent -p --resume "$CURSOR_CHAT_ID" --force --trust` with that prompt. Without `CURSOR_CHAT_ID` it starts a new headless run instead of resuming the desktop chat. Stop it with `.ai-collab/STOP`. The prompt tells the coordinator not to edit product code, allows every participant to run existing tests, and tells every participant not to commit.
 
 ### Claude Code
 
@@ -97,6 +97,32 @@ CLAUDE_SESSION_ID=<session-id> sh scripts/adapters/claude-wake.sh /path/to/repo 
 ```
 
 `frontend` is the participant name. This runs `claude -p --resume "$CLAUDE_SESSION_ID"` only after `inbox` reports mail for that name. Resume works after the original session has finished, not while it is still running.
+
+### Live observation for bundled shell adapters
+
+Both `claude-wake.sh` and `cursor-wake.sh` now delegate their single inbox cycle
+to `scripts/wake_adapter.py`. This fixed-tool helper preserves the existing
+resume arguments, permissions, inherited working directory and terminal
+input/output. It does not accept an arbitrary command. The existing shell
+polling, `COLLAB_ONCE=1`, `.ai-collab/STOP`, and retry-on-next-poll behavior remain
+unchanged; a vendor failure does not make the shell polling loop exit.
+
+An actual child invocation produces `observer: "wake-adapter"` metadata in
+`.ai-collab/runtime/runs/`, using the same one-second heartbeat, five-second
+expiry and local PID checks as `collab.py watch`. Start failure, completion,
+nonzero exit, observer loss or expired observations do not remain active. An
+invalid inbox notification has `message_id: null`, not a fabricated message ID.
+Idle inboxes and recorded task phases do not create activity.
+
+No vendor stdout/stderr, command arguments, prompt, environment, or session/chat
+IDs are added to these records or a new log file (`log` is `null`). Output still
+goes to the invoking terminal as before; users who redirect that output own the
+resulting file. Runtime exception metadata contains only the exception type.
+Telemetry write failure does not cancel the vendor command, but absent/stale
+observations remain inactive. This observes only a direct child launched by an
+explicitly started bundled adapter, not arbitrary existing desktop/manual
+sessions, detached subprocesses, or external human chat input. Those remain
+unobservable unless a supported, separately authorized integration is supplied.
 
 ### ChatGPT desktop
 

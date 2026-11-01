@@ -113,6 +113,19 @@ def capture_context(root: Path, thread_id: str) -> Dict[str, Any]:
         for path in sorted((thread / directory).glob("*")):
             if path.is_file() and not path.name.startswith("."):
                 messages.append([directory + "/" + path.name, _file_digest(path)])
+    local_relative = f".ai-collab/local/human-events/{thread_id}"
+    cursor = root
+    for component in Path(local_relative).parts:
+        cursor = cursor / component
+        if cursor.is_symlink():
+            raise collab.CollaborationError("local human event store must not contain symlinks")
+    local_humans = collab.resolve_repo_path(root, local_relative, label="local human events")
+    for path in sorted(local_humans.glob("*.json")):
+        if path.is_symlink():
+            raise collab.CollaborationError("local human event must not be a symlink")
+        checked = collab.resolve_repo_path(root, path.relative_to(root).as_posix(), must_exist=True, label="local human event")
+        if checked.is_file():
+            messages.append(["local-human-events/" + path.name, _file_digest(checked)])
     identities = collab.resolve_repo_path(root, ".ai-collab/identities.json", label="identity registry")
     if identities.exists():
         messages.append(["identities.json", _file_digest(identities)])

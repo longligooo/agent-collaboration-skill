@@ -53,6 +53,11 @@ def _safe_path(root: Path, relative: str) -> Path:
 
 def _directory(root: Path, thread_id: str) -> Path:
     collab.validate_id(thread_id, "thread_id")
+    return _safe_path(root, f".ai-collab/local/human-events/{thread_id}")
+
+
+def _legacy_directory(root: Path, thread_id: str) -> Path:
+    collab.validate_id(thread_id, "thread_id")
     return _safe_path(root, f".ai-collab/threads/{thread_id}/human-events")
 
 
@@ -152,24 +157,31 @@ def read_human_events(root: Path, thread_id: str) -> Dict[str, Any]:
     events, errors = [], []
     root = Path(root).resolve()
     try:
-        directory = _directory(root, thread_id)
+        directories = (_legacy_directory(root, thread_id), _directory(root, thread_id))
         collab.load_manifest(root, thread_id)
-        if not directory.exists():
-            return {"events": [], "errors": []}
-        if not directory.is_dir():
-            raise collab.CollaborationError("human-events must be a directory")
-        sources = set()
-        for path in sorted(directory.glob("*.json")):
-            try:
-                event = _read_file(root, thread_id, path)
-                key = _source_key(event)
-                if key and key in sources:
-                    raise collab.CollaborationError("duplicate source message in persisted human events")
-                if key:
-                    sources.add(key)
-                events.append(_normalized(event))
-            except (collab.CollaborationError, OSError, TypeError, ValueError) as exc:
-                errors.append({"document": path.relative_to(root).as_posix(), "error": str(exc)})
+        sources, identifiers = {}, {}
+        for directory in directories:
+            if not directory.exists():
+                continue
+            if not directory.is_dir():
+                raise collab.CollaborationError("human-events must be a directory")
+            for path in sorted(directory.glob("*.json")):
+                try:
+                    event = _read_file(root, thread_id, path)
+                    previous = identifiers.get(event["event_id"])
+                    if previous is not None:
+                        if previous == event:
+                            continue  # A byte-equivalent retained legacy copy is not a second input.
+                        raise collab.CollaborationError("conflicting event_id across human-event stores")
+                    key = _source_key(event)
+                    if key and key in sources:
+                        raise collab.CollaborationError("duplicate source message in persisted human events")
+                    if key:
+                        sources[key] = event
+                    identifiers[event["event_id"]] = event
+                    events.append(_normalized(event))
+                except (collab.CollaborationError, OSError, TypeError, ValueError) as exc:
+                    errors.append({"document": path.relative_to(root).as_posix(), "error": str(exc)})
     except (collab.CollaborationError, OSError) as exc:
         errors.append({"thread_id": thread_id, "error": str(exc)})
     events.sort(key=lambda item: (datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")), item["event_id"]))
@@ -252,8 +264,18 @@ def record_human_event(root: Path, thread_id: str, payload: dict) -> Dict[str, A
                      "recorded_at": collab.now_iso(),
                      "attribution_label": _label(candidate["provenance"])}
             directory = _directory(root, thread_id)
-            directory.mkdir(exist_ok=True)
-            path = _safe_path(root, f".ai-collab/threads/{thread_id}/human-events/{candidate['event_id']}.json")
+            directory.mkdir(parents=True, exist_ok=True)
+            # This store sits outside the thread sync root. Also prevent an
+            # ordinary git add from staging new captures in repositories that
+            # do not ignore .ai-collab globally. Explicit git add -f remains a
+            # manual override; git-sync has independent path/history guards.
+            ignore = _safe_path(root, f".ai-collab/local/human-events/{thread_id}/.gitignore")
+            try:
+                with ignore.open("x", encoding="utf-8") as stream:
+                    stream.write("*\n")
+            except FileExistsError:
+                pass
+            path = _safe_path(root, f".ai-collab/local/human-events/{thread_id}/{candidate['event_id']}.json")
             _publish(path, event)
             return {"result": "RECORDED", "event": _normalized(event)}
     except OSError as exc:

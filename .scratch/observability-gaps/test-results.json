@@ -1,0 +1,21 @@
+{
+  "base_main": "5a36cc5712eee0033fc0263ea7edf2e5fc39eda9",
+  "branch": "fix/observability-gaps",
+  "command": "python -m unittest discover -s tests -v",
+  "tests": 229,
+  "seconds": 47.457,
+  "result": "passed",
+  "independent_review": "no remaining blocking findings",
+  "browser": "not run: sandbox socket EPERM; scoped escalation environment setup failed, no retry",
+  "real_vendor_calls": 0,
+  "real_chat_access": false,
+  "validation_date": "2026-10-30",
+  "publication_authorized_at": "2026-11-01T05:12:00Z",
+  "publication_status_at_validation": "not published on 2026-10-30; direct main publication authorized separately on 2026-11-01",
+  "prepublication_validation": {
+    "date": "2026-11-01",
+    "tests": 229,
+    "seconds": 42.923,
+    "result": "passed"
+  }
+}

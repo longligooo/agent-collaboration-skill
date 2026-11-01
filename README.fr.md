@@ -231,7 +231,7 @@ L'interface web reste désactivée tant que personne n'exécute :
 python scripts/collab.py ui --root .
 ```
 
-Elle écoute sur `127.0.0.1:23451` sous Windows, macOS et Linux. La commande sonde d'abord ce port. Une seconde exécution enregistre le dépôt courant auprès de l'interface déjà en cours d'exécution. Ouvrez `http://127.0.0.1:23451/` pour voir tous les projets enregistrés, leurs fils et chaque participant dans les différents projets. La page ne s'actualise pas automatiquement ; utilisez 刷新 (« Actualiser »). La première version utilise un thème sombre. Ne la démarrez que lorsqu'un humain demande le service de collaboration en arrière-plan ou l'interface web.
+Elle écoute sur `127.0.0.1:23451` sous Windows, macOS et Linux. La commande sonde d'abord ce port. Une seconde exécution enregistre le dépôt courant auprès de l'interface déjà en cours d'exécution. Ouvrez `http://127.0.0.1:23451/` pour voir tous les projets enregistrés, leurs fils et chaque participant dans les différents projets. Les fils sont triés par activité récente, tous projets confondus. La conversation et les tâches affichées s'actualisent automatiquement en conservant la position de lecture et les éléments dépliés ; 刷新 (« Actualiser ») reste disponible. L'animation exige une observation d'exécution réelle et non expirée. La première version utilise un thème sombre. Ne la démarrez que lorsqu'un humain demande le service de collaboration en arrière-plan ou l'interface web.
 
 Exécutez `python scripts/collab.py --help` pour consulter les options des commandes.
 

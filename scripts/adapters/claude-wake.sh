@@ -5,7 +5,6 @@
 set -eu
 
 INTERVAL="${COLLAB_INTERVAL:-30}"
-SESSION_ID="${CLAUDE_SESSION_ID:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ROOT=$(CDPATH= cd -- "${1:-.}" && pwd)
 AGENT=${2:-${COLLAB_AGENT:-}}
@@ -14,23 +13,12 @@ if [ -z "$AGENT" ]; then
   exit 2
 fi
 
-wake() {
-  prompt=$1
-  if [ -n "$SESSION_ID" ]; then
-    claude -p "$prompt" --resume "$SESSION_ID" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" || true
-  else
-    claude -p "$prompt" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" || true
-  fi
-}
-
 run_once() {
   if [ -f "$ROOT/.ai-collab/STOP" ]; then
     printf '%s\n' "stopped"
     exit 0
   fi
-  if prompt=$(python3 "$SCRIPT_DIR/collab.py" inbox --root "$ROOT" --agent "$AGENT" --format prompt); then
-    wake "$prompt"
-  fi
+  python3 "$SCRIPT_DIR/wake_adapter.py" --tool claude --root "$ROOT" --agent "$AGENT" || true
 }
 
 if [ "${COLLAB_ONCE:-}" = "1" ]; then

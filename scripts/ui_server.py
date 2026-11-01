@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import parse_qs
 
 import collab
+import ui_read_model
 
 UI_PORT = 23451
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
@@ -105,6 +106,7 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
         "round": 0,
         "started_at": "",
         "updated_at": "",
+        "last_activity_at": "",
         "turns": [],
         "signals": [],
         "error": None,
@@ -170,8 +172,8 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
                     "error": result.get("error"),
                 }
             )
+    record["last_activity_at"] = ui_read_model.last_activity_at(record)
     try:
-        import ui_read_model
         record = ui_read_model.thread_projection(root, thread_id, record)
     except (collab.CollaborationError, OSError, ValueError, TypeError, KeyError) as exc:
         record["projection_error"] = str(exc)
@@ -208,7 +210,7 @@ def scan_project(entry: Dict[str, Any]) -> Dict[str, Any]:
         return project
     for thread_id in thread_ids:
         threads.append(scan_thread(root, thread_id, project))
-    threads.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    threads.sort(key=ui_read_model.thread_sort_key)
     project["threads"] = threads
     return project
 
@@ -265,7 +267,9 @@ def collaborator_records(projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                         "participant": current_actor and agent in thread["participants"],
                         "pending": len(pending), "status": thread["status"],
                         "started_at": thread.get("started_at") or "", "terminal": bool(thread.get("terminal")),
-                        "updated_at": thread["updated_at"]})
+                        "updated_at": thread["updated_at"], "last_activity_at": thread.get("last_activity_at", "")})
+    for person in people.values():
+        person["threads"].sort(key=ui_read_model.thread_sort_key)
     return sorted(people.values(), key=lambda item: (-item["pending"], item["id"]))
 
 

@@ -25,6 +25,14 @@ const taskPending = new Set();
 const disclosureState = new Set();
 const scrollState = new Map();
 let contentGeneration = 0;
+let contentTimer = null;
+let contentController = null;
+let contentSequence = 0;
+let contentSuspended = false;
+const contentRequests = new Map();
+const CONTENT_POLL_MS = 3000;
+const REQUEST_TIMEOUT_MS = 6000;
+let reusableMessages = new Map();
 try { selectedIdentity = localStorage.getItem("collab.viewIdentity") || ""; } catch (_) { /* Optional preference. */ }
 
 function h(tag, props, ...children) {
@@ -61,16 +69,16 @@ function routeKey(projectId, threadId) { return JSON.stringify([projectId, threa
 function threadHref(projectId, threadId) { return `#/threads/${encodeURIComponent(projectId)}/${encodeURIComponent(threadId)}`; }
 function taskHref(identity) { return `#/tasks/${encodeURIComponent(identity)}`; }
 function formatTime(value) {
-  if (!value) return "时间未提供";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? M.text(value) : new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+  if (typeof value !== "string" || !value) return "时间未提供";
+  const timestamp = M.activityTime(value);
+  return Number.isFinite(timestamp) ? new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp)) : value;
 }
 function clockTime(value) {
-  const date = new Date(value);
-  return !value || Number.isNaN(date.getTime()) ? "时间未提供" : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
+  const timestamp = M.activityTime(value);
+  return Number.isFinite(timestamp) ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp)) : "时间未提供";
 }
 function formatDuration(start, end) {
-  const from = new Date(start).getTime(), to = end ? new Date(end).getTime() : Date.now();
+  const from = M.activityTime(start), to = end ? M.activityTime(end) : Date.now();
   if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return "";
   const minutes = Math.floor((to - from) / 60000);
   if (minutes < 1) return "不到 1 分钟";
@@ -87,7 +95,7 @@ function ownLabel(table, key, fallback) { return Object.hasOwn(table, key) ? tab
 function statusPill(status) { return h("span", { class: `pill status-${ownLabel(STATUS_CLASSES, status, "none")}`, title: status || "NONE" }, ownLabel(STATUS_LABELS, status, M.text(status) || "未开始")); }
 function findProject(id) { return M.array(snapshot?.projects).find(project => project.id === id); }
 function findThread(projectId, threadId) { return M.array(findProject(projectId)?.threads).find(thread => thread.thread_id === threadId) || null; }
-function allThreads() { return M.array(snapshot?.projects).flatMap(project => M.array(project.threads).map(thread => ({ ...thread, project_id: project.id, project_name: project.name }))); }
+function allThreads() { return M.sortThreads(M.array(snapshot?.projects).flatMap(project => M.array(project.threads).map(thread => ({ ...thread, project_id: project.id, project_name: project.name })))); }
 function people() { return M.array(snapshot?.collaborators); }
 function personIdentity(person) { return person.identity || person.stable_identity || person.id; }
 function humanIdentities() {
@@ -136,7 +144,7 @@ function collaboratorPills(thread) {
 function avatarStack(thread) { return h("span", { class: "avatar-stack" }, M.participants(thread).map(person => avatar(person.identity, person.agent, "sm", person.actor_type === "human"))); }
 function disclosure(key, label, content, className = "") {
   const node = h("details", { class: className, "data-disclosure": key, open: disclosureState.has(key) }, h("summary", {}, label), content);
-  node.addEventListener("toggle", () => node.open ? disclosureState.add(key) : disclosureState.delete(key));
+  node.addEventListener("toggle", () => { if (node.isConnected !== false) node.open ? disclosureState.add(key) : disclosureState.delete(key); });
   return node;
 }
 function inlineText(value) {
@@ -161,10 +169,22 @@ function readableBody(value) {
   return node;
 }
 function messageKind(entry) { return M.isHumanEntry(entry) ? "HUMAN" : M.text(entry.kind).toUpperCase(); }
+function messageKey(entry, thread, index) { return JSON.stringify([thread.project_id, thread.thread_id, entry.id || entry.document || `legacy-${index}`]); }
+function uniqueHistory(thread) {
+  const seen = new Set();
+  return M.history(thread).filter((entry, index) => {
+    const key = messageKey(entry, thread, index);
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
 function messageNode(entry, thread, index) {
   const human = M.isHumanEntry(entry), author = M.actorFor(thread, entry.author, entry.identity, human ? "human" : "agent");
   const coordinator = !human && (entry.is_coordinator === true || (!Array.isArray(thread.history) && author.is_coordinator));
-  const key = `${thread.project_id}/${thread.thread_id}/${entry.id || index}`;
+  const key = messageKey(entry, thread, index);
+  const signature = JSON.stringify([entry, author, coordinator]);
+  const previous = reusableMessages.get(key);
+  if (previous && previous.messageSignature === signature) return previous;
   const kind = messageKind(entry);
   const recipients = human && entry.recipient_source !== "explicit-human-input" ? [] : M.recipients(entry);
   const bubble = h("div", { class: `bubble${human ? " human-bubble" : ""}` });
@@ -188,11 +208,13 @@ function messageNode(entry, thread, index) {
     ), "human-provenance"));
   } else if (entry.type === "human-input") bubble.append(h("p", { class: "warning" }, "这条记录缺少完整人类来源，未按人类原话呈现。"));
   if (entry.document) bubble.append(disclosure(`${key}/document`, "记录位置", h("code", { class: "path" }, entry.document), "document-details"));
-  return h("article", { class: `message${human || coordinator ? " own" : ""}${human ? " human-message" : ""}`, "data-author-id": author.identity, "data-message-kind": kind },
+  const node = h("article", { class: `message${human || coordinator ? " own" : ""}${human ? " human-message" : ""}`, "data-message-key": key, "data-author-id": author.identity, "data-message-kind": kind },
     avatar(author.identity, author.agent, "", human), h("div", { class: "message-main" },
       h("div", { class: "message-header" }, h("span", { class: "message-name" }, author.agent), h("span", { class: "message-role" }, human ? "人类" : coordinator ? "协调者 · 你的替身" : entry.role || "协作者")), bubble,
       h("div", { class: "message-footer" }, h("span", { class: `kind ${kind.toLowerCase()}` }, ownLabel(KIND_LABELS, kind, kind || "记录")), h("time", { datetime: entry.created_at || null, title: formatTime(entry.created_at) }, clockTime(entry.created_at)), entry.round != null ? h("span", {}, `R${entry.round}`) : null, entry.legacy ? h("span", {}, "旧版摘要") : null, entry.status ? statusPill(entry.status) : null),
     ));
+  node.messageSignature = signature;
+  return node;
 }
 function runningMessages(thread) {
   const runs = activityError ? [] : M.activeRuns(activity, nowOnServer(), humanIdentities()).filter(run => run.project_id === thread.project_id && run.thread_id === thread.thread_id);
@@ -211,7 +233,7 @@ function threadList(current) {
     h("div", { class: "search" }, icon("search"), h("input", { id: "thread-search", value: threadQuery, placeholder: "搜索线程…", "aria-label": "搜索线程", oninput: event => { const position = event.target.selectionStart; threadQuery = event.target.value; render(); const field = document.querySelector("#thread-search"); field?.focus(); field?.setSelectionRange(position, position); } })),
     h("div", { class: "section-cap" }, h("span", {}, "项目线程"), `${items.length} 个`),
     items.length ? items.map(thread => h("a", { class: `thread-item${thread.project_id === current.project_id && thread.thread_id === current.thread_id ? " active" : ""}`, href: threadHref(thread.project_id, thread.thread_id) },
-      h("div", { class: "thread-meta" }, thread.project_name, h("span", {}, formatTime(thread.updated_at))), h("h3", {}, thread.topic), h("p", { class: "thread-preview" }, thread.objective || thread.thread_id), h("div", { class: "thread-bottom" }, avatarStack(thread), statusPill(thread.status)))) : h("p", { class: "quiet" }, "没有匹配线程。"),
+      h("div", { class: "thread-meta" }, thread.project_name, h("span", {}, formatTime(M.lastActivityAt(thread)))), h("h3", {}, thread.topic), h("p", { class: "thread-preview" }, thread.objective || thread.thread_id), h("div", { class: "thread-bottom" }, avatarStack(thread), statusPill(thread.status)))) : h("p", { class: "quiet" }, "没有匹配线程。"),
     h("p", { class: "list-info" }, "头像下像素条表示当前工作中。跨线程共享同一身份；历史头像反映当前状态。"));
 }
 function blockerLabel(item) {
@@ -242,12 +264,12 @@ function renderThread(projectId, threadId) {
   const base = findThread(projectId, threadId);
   if (!base) return missing("没有这个线程。");
   const key = routeKey(projectId, threadId), thread = details.get(key) || base;
-  const entries = M.history(thread), visible = entries.filter(entry => messageFilter === "all" || messageKind(entry) === messageFilter);
+  const entries = uniqueHistory(thread), visible = entries.filter(entry => messageFilter === "all" || messageKind(entry) === messageFilter);
   const kinds = [...new Set(entries.map(messageKind).filter(Boolean))];
   return h("div", { class: "thread-workspace" }, threadList(thread), h("section", { class: "chat", "aria-label": "协作群聊记录" },
     h("div", { class: "chat-head" }, h("div", { class: "chat-titleline" }, h("h2", {}, thread.topic), statusPill(thread.status)), h("div", { class: "thread-code" }, `${thread.thread_id} · 第 ${thread.round || 0} 轮 · ${thread.coordinator ? "人类与协调者在右侧" : "未指定协调者"}`), h("div", { class: "participants", "aria-label": "群组成员" }, collaboratorPills(thread))),
     h("div", { class: "chat-tools" }, h("div", { class: "filters", "aria-label": "记录类型" }, ["all", ...kinds].map(kind => h("button", { type: "button", class: `filter${messageFilter === kind ? " active" : ""}`, "aria-pressed": messageFilter === kind, onclick: () => { messageFilter = kind; render(); } }, kind === "all" ? "全部" : ownLabel(KIND_LABELS, kind, kind)))), h("span", { class: "messages-count" }, `${visible.length} 条`)),
-    detailErrors.has(key) ? h("p", { class: "inline-warning" }, `完整记录读取失败：${detailErrors.get(key)}。当前显示已加载摘要。`) : detailPending.has(key) ? h("p", { class: "inline-info" }, "正在读取完整记录…") : null,
+    detailErrors.has(key) ? h("p", { class: "inline-warning" }, `完整记录读取失败：${detailErrors.get(key)}。保留已加载记录，可能不是最新状态。`) : detailPending.has(key) && !details.has(key) ? h("p", { class: "inline-info" }, "正在读取完整记录…") : null,
     M.array(thread.history_errors).length || M.array(thread.turns).some(turn => turn.error) || thread.projection_error ? h("p", { class: "inline-warning" }, "部分历史或任务信息无法读取；未核实的来源不作为人类原话展示。") : null,
     h("div", { class: "messages", "data-scroll-key": `${key}/${messageFilter}`, "aria-label": "聊天历史" }, h("div", { class: "date-rule" }, "按记录时间排序 · 只读"), visible.length ? visible.map((entry, index) => messageNode(entry, thread, index)) : h("div", { class: "empty" }, "还没有此类记录。"), h("div", { class: "live-messages", "data-thread-key": key }, messageFilter === "all" ? runningMessages(thread) : null)),
     h("div", { class: "read-only" }, h("span", {}, icon("lock"), "只读协作记录 · 不支持在此发送消息"), h("span", { class: "activity-health" }, activityError ? "执行观测暂不可用" : "仅新鲜执行观测显示动效")),
@@ -255,6 +277,7 @@ function renderThread(projectId, threadId) {
 }
 function signalCard(signal) { return h("div", { class: "card" }, h("div", { class: "card-top" }, `${signal.from || "?"} → ${signal.to || "?"}`, h("span", { class: "meta" }, formatTime(signal.created_at))), h("div", { class: "pills" }, h("span", { class: "pill" }, signal.decision), signal.requested_action ? h("span", { class: "pill" }, signal.requested_action) : null), signal.error ? h("p", { class: "warning" }, signal.error) : null); }
 function threadCards(threads) {
+  threads = M.sortThreads(threads);
   return threads.length ? h("div", { class: "stack" }, threads.map(thread => h("a", { class: "card thread-card", href: threadHref(thread.project_id, thread.thread_id) }, h("div", { class: "card-top" }, h("span", { class: "title" }, thread.topic), statusPill(thread.status)), h("div", { class: "quiet" }, `${thread.project_name} · ${thread.thread_id}`), h("p", { class: "quiet" }, threadTiming(thread)), h("div", { class: "card-bottom" }, avatarStack(thread), h("span", { class: "meta" }, `第 ${thread.round || 0} 轮`)), M.array(thread.signals).some(signal => signal.decision === "NEW") ? h("span", { class: "pill attention" }, "有待处理通知") : null))) : missing("这个范围内还没有线程。");
 }
 function renderOverview() {
@@ -303,12 +326,64 @@ function pageTitle(current) {
   return ["总览", "本机已注册项目的协作状态"];
 }
 function nav(label, href, active, symbol) { return h("a", { class: `nav-link${active ? " active" : ""}`, href, title: label, "aria-current": active ? "page" : null }, icon(symbol), h("span", { class: "nav-text" }, label)); }
+function documentScrollsMessages(messages) { return window.getComputedStyle?.(messages).overflowY === "visible"; }
+function setDocumentScroll(top) { window.scrollTo?.({ left: window.scrollX || 0, top, behavior: "instant" }); }
 function rememberView() {
+  for (const node of document.querySelectorAll("details[data-disclosure]")) {
+    if (node.open) disclosureState.add(node.dataset.disclosure); else disclosureState.delete(node.dataset.disclosure);
+  }
   const messages = document.querySelector(".messages");
-  if (messages) scrollState.set(messages.dataset.scrollKey, { top: messages.scrollTop, bottom: messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40 });
+  if (messages) {
+    // At narrow widths the chat grows naturally and the document, not the
+    // messages element, scrolls. Preserve the same visible record in both modes.
+    const page = documentScrollsMessages(messages), scroller = document.scrollingElement;
+    const scrollTop = page ? window.scrollY || scroller?.scrollTop || 0 : messages.scrollTop;
+    const top = page ? 0 : messages.getBoundingClientRect?.().top;
+    const anchor = Number.isFinite(top) && (!page || scrollTop > 0) ? [...messages.querySelectorAll(".message[data-message-key]")].find(node => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > top && (!page || rect.top < window.innerHeight);
+    }) : null;
+    const bottom = page ? !!scroller && scroller.scrollHeight - scrollTop - window.innerHeight < 40 : messages.scrollHeight - scrollTop - messages.clientHeight < 40;
+    scrollState.set(messages.dataset.scrollKey, { mode: page ? "document" : "element", top: scrollTop, bottom,
+      anchor: anchor?.dataset.messageKey, offset: anchor ? anchor.getBoundingClientRect().top - top : null });
+  }
+}
+function restoreMessages() {
+  const messages = document.querySelector(".messages");
+  if (!messages) return;
+  const saved = scrollState.get(messages.dataset.scrollKey), page = documentScrollsMessages(messages);
+  if (page) {
+    if (!saved || saved.mode !== "document") return;
+    setDocumentScroll(saved.bottom ? document.scrollingElement.scrollHeight : saved.top);
+  } else {
+    if (!saved || saved.mode === "document" || saved.bottom) { messages.scrollTop = messages.scrollHeight; return; }
+    messages.scrollTop = saved.top;
+  }
+  if (saved.bottom) return;
+  const anchor = [...messages.querySelectorAll(".message[data-message-key]")].find(node => node.dataset.messageKey === saved.anchor);
+  if (anchor && Number.isFinite(saved.offset) && messages.getBoundingClientRect) {
+    const delta = anchor.getBoundingClientRect().top - (page ? 0 : messages.getBoundingClientRect().top) - saved.offset;
+    if (page) setDocumentScroll((window.scrollY || 0) + delta); else messages.scrollTop += delta;
+  }
+}
+function viewState() {
+  const focused = document.activeElement;
+  return { focused, focusId: focused?.getAttribute?.("id"), start: focused?.selectionStart, end: focused?.selectionEnd,
+    scrolls: [".main", ".threadlist", ".inspector"].map(selector => ({ selector, top: document.querySelector(selector)?.scrollTop || 0 })) };
+}
+function restoreView(saved) {
+  for (const item of saved.scrolls) { const node = document.querySelector(item.selector); if (node) node.scrollTop = item.top; }
+  let focused = saved.focused?.isConnected ? saved.focused : null;
+  if (!focused && saved.focusId) focused = [...document.querySelectorAll("[id]")].find(node => node.getAttribute("id") === saved.focusId);
+  if (focused) {
+    focused.focus({ preventScroll: true });
+    if (typeof saved.start === "number" && focused.setSelectionRange) focused.setSelectionRange(saved.start, saved.end);
+  }
 }
 function render() {
   rememberView();
+  const savedView = viewState();
+  reusableMessages = new Map([...document.querySelectorAll(".message[data-message-key]")].map(node => [node.dataset.messageKey, node]));
   const current = route(), [title, subtitle] = pageTitle(current);
   const active = ({ project: "projects", thread: "threads", person: "people" })[current.name] || current.name;
   let body;
@@ -327,9 +402,10 @@ function render() {
     h("div", { class: "rail-label" }, "WORKSPACE"), h("nav", { "aria-label": "主导航" }, nav("总览", "#/", active === "overview", "overview"), nav("项目", "#/projects", active === "projects", "project"), nav("协作线程", "#/threads", active === "threads", "thread"), nav("我的任务", taskHref(selectedIdentity || ""), active === "tasks", "tasks"), nav("协作者", "#/people", active === "people", "people")),
     h("div", { class: "sidebar-foot" }, h("p", {}, "本机只读界面"), h("code", {}, `127.0.0.1:${snapshot?.port || 23451}`), h("p", {}, "像素条表示当前工作中；等待或状态过期时不显示。"))),
     h("main", { class: `main${current.name === "thread" ? " thread-page" : ""}` }, error ? h("div", { class: "banner" }, error) : null,
-      h("header", { class: "top" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, subtitle)), h("div", { class: "top-actions" }, snapshot ? h("span", { class: "meta" }, `更新于 ${formatTime(snapshot.generated_at)}`) : null, h("button", { type: "button", class: "refresh", disabled: loading, onclick: () => load() }, loading ? "读取中…" : "刷新"), current.name === "thread" ? h("button", { class: "mobile-threads", type: "button", "aria-expanded": mobileThreads, onclick: () => { mobileThreads = !mobileThreads; render(); } }, "切换线程") : null)), body)));
-  const messages = document.querySelector(".messages");
-  if (messages) { const saved = scrollState.get(messages.dataset.scrollKey); messages.scrollTop = saved && !saved.bottom ? saved.top : messages.scrollHeight; }
+      h("header", { class: "top" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, subtitle)), h("div", { class: "top-actions" }, snapshot ? h("span", { class: "meta snapshot-time" }, `更新于 ${formatTime(snapshot.generated_at)}`) : null, h("button", { type: "button", class: "refresh", disabled: loading, onclick: () => load() }, loading ? "读取中…" : "刷新"), current.name === "thread" ? h("button", { class: "mobile-threads", type: "button", "aria-expanded": mobileThreads, onclick: () => { mobileThreads = !mobileThreads; render(); } }, "切换线程") : null)), body)));
+  reusableMessages = new Map();
+  restoreMessages();
+  restoreView(savedView);
   paintActivity();
 }
 async function getJSON(url, signal) {
@@ -337,34 +413,101 @@ async function getJSON(url, signal) {
   if (!response.ok) throw new Error(`读取失败（${response.status}）`);
   return response.json();
 }
-async function ensureRouteData() {
-  if (!snapshot) return;
+function contentSignature(payload) {
+  // Server sampling time alone must not remount an unchanged conversation.
+  if (!payload || typeof payload !== "object") return JSON.stringify(payload);
+  const { generated_at, ...content } = payload;
+  return JSON.stringify(content);
+}
+function cancelContentRequests() {
+  contentGeneration += 1;
+  for (const request of contentRequests.values()) request.controller.abort();
+  contentRequests.clear(); detailPending.clear(); taskPending.clear();
+}
+async function ensureRouteData({ force = false, background = false } = {}) {
+  if (!snapshot || document.hidden || contentSuspended) return;
   const current = route(), generation = contentGeneration;
-  if (current.name === "thread") {
-    const key = routeKey(current.projectId, current.threadId);
-    if (details.has(key) || detailPending.has(key)) return;
-    detailPending.add(key); render();
-    try { const payload = await getJSON(`/api/thread?${new URLSearchParams({ project_id: current.projectId, thread_id: current.threadId })}`); if (generation === contentGeneration && payload?.thread) { details.set(key, payload.thread); detailErrors.delete(key); } }
-    catch (exc) { if (generation === contentGeneration) detailErrors.set(key, exc.message); }
-    finally { if (generation === contentGeneration) { detailPending.delete(key); if (routeKey(route().projectId, route().threadId) === key) render(); } }
-  } else if (current.name === "tasks") {
-    const identity = current.id || selectedIdentity || (people()[0] && personIdentity(people()[0]));
-    if (!identity || tasks.has(identity) || taskPending.has(identity)) return;
-    taskPending.add(identity); render();
-    try { const payload = await getJSON(`/api/tasks?${new URLSearchParams({ identity })}`); if (generation === contentGeneration) { tasks.set(identity, payload); taskErrors.delete(identity); } }
-    catch (exc) { if (generation === contentGeneration) taskErrors.set(identity, exc.message); }
-    finally { if (generation === contentGeneration) { taskPending.delete(identity); if (route().name === "tasks") render(); } }
+  const isThread = current.name === "thread";
+  const identity = current.id || selectedIdentity || (people()[0] && personIdentity(people()[0]));
+  if (!isThread && (current.name !== "tasks" || !identity)) return;
+  const key = isThread ? routeKey(current.projectId, current.threadId) : identity;
+  const requestKey = JSON.stringify([isThread ? "thread" : "tasks", key]);
+  const cache = isThread ? details : tasks, failures = isThread ? detailErrors : taskErrors, pending = isThread ? detailPending : taskPending;
+  if (!force && (cache.has(key) || pending.has(key))) return;
+  contentRequests.get(requestKey)?.controller.abort();
+  const request = { controller: new AbortController() };
+  contentRequests.set(requestKey, request); pending.add(key);
+  const firstLoad = !cache.has(key);
+  if (firstLoad && !background) render();
+  const timeout = setTimeout(() => request.controller.abort(), REQUEST_TIMEOUT_MS);
+  let changed = false;
+  const valid = () => generation === contentGeneration && contentRequests.get(requestKey) === request && !request.controller.signal.aborted;
+  try {
+    const url = isThread ? `/api/thread?${new URLSearchParams({ project_id: current.projectId, thread_id: current.threadId })}` : `/api/tasks?${new URLSearchParams({ identity })}`;
+    const payload = await getJSON(url, request.controller.signal);
+    if (!valid()) return;
+    const value = isThread ? payload?.thread : payload;
+    if (!value || (isThread && (value.project_id !== current.projectId || value.thread_id !== current.threadId))) throw new Error("返回的记录数据格式无效");
+    changed = contentSignature(cache.get(key)) !== contentSignature(value) || failures.has(key);
+    cache.set(key, value); failures.delete(key);
+  } catch (exc) {
+    // A timeout is a read failure; superseded or hidden-page requests are not.
+    if (generation === contentGeneration && contentRequests.get(requestKey) === request) {
+      const message = exc.name === "AbortError" ? "读取超时" : exc.message;
+      changed = failures.get(key) !== message; failures.set(key, message);
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (generation === contentGeneration && contentRequests.get(requestKey) === request) {
+      pending.delete(key); contentRequests.delete(requestKey);
+      const visible = route();
+      const sameRoute = isThread ? visible.name === "thread" && routeKey(visible.projectId, visible.threadId) === key : visible.name === "tasks" && (visible.id || selectedIdentity || (people()[0] && personIdentity(people()[0]))) === key;
+      if (sameRoute && (changed || (firstLoad && !background))) render();
+    }
   }
 }
-async function load() {
-  if (loading) return;
-  loading = true; render();
+function scheduleContent() {
+  clearTimeout(contentTimer);
+  if (!document.hidden && !contentSuspended) contentTimer = setTimeout(() => load({ background: true }), CONTENT_POLL_MS);
+}
+async function load({ background = false } = {}) {
+  if (document.hidden || contentSuspended) return;
+  clearTimeout(contentTimer);
+  const sequence = ++contentSequence;
+  contentController?.abort(); cancelContentRequests();
+  const controller = new AbortController(); contentController = controller;
+  loading = !background;
+  if (!background) render();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let changed = false;
   try {
-    const payload = await getJSON("/api/snapshot");
+    const payload = await getJSON("/api/snapshot", controller.signal);
+    if (sequence !== contentSequence || controller.signal.aborted) return;
     if (!payload || !Array.isArray(payload.projects)) throw new Error("返回的项目数据格式无效");
-    snapshot = payload; error = ""; contentGeneration += 1; details.clear(); detailErrors.clear(); detailPending.clear(); tasks.clear(); taskErrors.clear(); taskPending.clear();
-  } catch (exc) { error = `${exc.message || "无法读取协作数据"}。已加载记录可能不是最新状态。`; }
-  finally { loading = false; render(); ensureRouteData(); }
+    changed = contentSignature(snapshot) !== contentSignature(payload) || !!error;
+    snapshot = payload; error = "";
+  } catch (exc) {
+    if (sequence !== contentSequence) return;
+    const message = `${exc.name === "AbortError" ? "读取超时" : exc.message || "无法读取协作数据"}。已加载记录可能不是最新状态。`;
+    changed = error !== message; error = message;
+  } finally {
+    clearTimeout(timeout);
+    if (sequence === contentSequence) {
+      loading = false;
+      if (changed || !background) render();
+      else {
+        const stamp = document.querySelector(".snapshot-time"); if (stamp && snapshot) stamp.textContent = `更新于 ${formatTime(snapshot.generated_at)}`;
+        // A hidden/BFCache pause may interrupt a foreground refresh. Its old
+        // button must not remain disabled when an unchanged background read resumes.
+        const refresh = document.querySelector(".refresh"); if (refresh) { refresh.disabled = false; refresh.textContent = "刷新"; }
+      }
+      await ensureRouteData({ force: true, background });
+      if (sequence === contentSequence) scheduleContent();
+    }
+  }
+}
+function pauseContent() {
+  clearTimeout(contentTimer); contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
 }
 function paintActivity() {
   document.querySelectorAll(".avatar[data-avatar-id]").forEach(decorateAvatar);
@@ -400,9 +543,9 @@ async function pollActivity() {
     if (sequence === activitySequence) { paintActivity(); if (!document.hidden) activityTimer = setTimeout(pollActivity, 2000); }
   }
 }
-window.addEventListener("hashchange", () => { messageFilter = "all"; mobileThreads = false; render(); ensureRouteData(); });
-document.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(activityTimer); activitySequence += 1; activityController?.abort(); } else { paintActivity(); pollActivity(); } });
-window.addEventListener("pagehide", () => { clearTimeout(activityTimer); clearTimeout(expiryTimer); activitySequence += 1; activityController?.abort(); });
-window.addEventListener("pageshow", event => { if (event.persisted) pollActivity(); });
+window.addEventListener("hashchange", () => { messageFilter = "all"; mobileThreads = false; render(); ensureRouteData({ force: true }); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(activityTimer); activitySequence += 1; activityController?.abort(); pauseContent(); } else { paintActivity(); pollActivity(); load({ background: true }); } });
+window.addEventListener("pagehide", () => { contentSuspended = true; pauseContent(); clearTimeout(activityTimer); clearTimeout(expiryTimer); activitySequence += 1; activityController?.abort(); });
+window.addEventListener("pageshow", event => { if (event.persisted) { contentSuspended = false; pollActivity(); load({ background: true }); } });
 load();
 pollActivity();

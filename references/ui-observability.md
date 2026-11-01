@@ -1,17 +1,33 @@
 # Read-Only UI: Live Execution And Human-Input Provenance
 
 The approved group-history UI reads the same coding-task model as the CLI.
-Conversation and task details refresh manually. Only the lightweight activity
-endpoint is polled; a recorded task phase or pending inbox is **not** a running
-process. The UI has no message-sending or command-execution widget.
+Thread lists and the visible conversation/task view refresh automatically while
+the page is visible. Unchanged messages retain their DOM nodes, reading position,
+expanded disclosures and search focus; stable project/thread/message keys avoid
+duplicates and cross-project collisions. Requests are bounded, stale responses
+are ignored, and failed refreshes retain the last loaded records with a warning.
+The read APIs currently return full snapshots; incremental reconciliation happens
+in the browser, not by importing or intercepting any external conversation.
+A recorded task phase or pending inbox is **not** a running process. The UI has no message-sending or command-execution widget.
+
+## Latest Activity And Duration
+
+Threads are sorted globally, not concatenated in project order. The separate
+`last_activity_at` is the latest valid thread creation, agent-turn, human-input,
+or human-recording timestamp. Recording a supplied older original is therefore
+new activity without changing the source message's chronological position.
+Invalid timestamps sort last; equal instants use project ID then thread ID for
+stable ordering. `updated_at` retains its protocol-last-round meaning, including
+its existing use as the end of a terminal thread's duration.
 
 ## Observed Runner Lifecycle
 
-The existing, explicitly configured `collab.py watch` command observes the child
-process it already launches. This adds no new runner, scheduler, command source,
+The existing, explicitly configured `collab.py watch` command and bundled
+`claude-wake.sh` / `cursor-wake.sh` scripts observe the child process they already
+launch. This adds no new runner, scheduler, command source,
 permission, or credential setup. Starting the web UI does not start a watcher.
 
-After a real child starts, the watcher writes an atomic observation to:
+After a real child starts, its observer writes an atomic observation to:
 
 ```text
 .ai-collab/runtime/runs/<run-id>.json
@@ -21,10 +37,19 @@ Runtime files are outside `threads/`, so the existing `watch --git-sync` path
 will not publish local PIDs or activity telemetry. A record includes:
 
 - run, thread, message, local participant, and captured stable identity IDs;
-- observer `watcher`, hashed local machine/boot identity, and runner/child PIDs;
+- observer `watcher` or `wake-adapter`, hashed local machine/boot identity, and runner/child PIDs;
 - available process-start tokens, start/heartbeat/expiry timestamps;
 - `running`, `completed`, `failed`, `timed-out`, or `cancelled` status;
-- terminal exit/error information and the existing repository-relative log path.
+- terminal exit/error information and the existing watcher repository-relative log path;
+  adapter observations have `log: null` and create no raw-output log. An invalid
+  adapter notification has `message_id: null`, never a manufactured message ID.
+
+The fixed-tool adapter helper preserves existing command arguments, resume
+behavior, standard input/output and polling. Telemetry stores no prompt, session
+ID, environment or raw CLI output; errors contain an exception class, not argv.
+It observes only calls made through these bundled scripts or the watcher.
+Manually started external sessions remain unobserved; no universal interception
+or automatic external-chat import is provided.
 
 The normal heartbeat is every second with a five-second lease. The reader marks
 an observation active only when its status is running, its lease is fresh, its
@@ -61,11 +86,11 @@ To display original human input, explicitly record user-supplied text with
   conversation ID, source message ID, and source author. The UI preserves the
   supplied provenance but does not claim independent authentication.
 
-Write a JSON input under `.ai-collab/`, then explicitly record it:
+Write a JSON input under `.ai-collab/local/`, then explicitly record it:
 
 ```bash
 python scripts/collab.py human-record --root . --thread-id config-redesign \
-  --event-file .ai-collab/human-input.json
+  --event-file .ai-collab/local/human-input.json
 ```
 
 Example (illustrative source IDs, not a real imported conversation):
@@ -100,12 +125,50 @@ inference. Human authors may be external stable slugs not present in old immutab
 manifests; recording a human event grants no publishing, ACK, task-update, or
 command authority to that author and does not modify the manifest.
 
-Events are immutable files under `threads/<id>/human-events/<event-id>.json`.
+New events are immutable, **local-only by default** files under
+`.ai-collab/local/human-events/<thread-id>/<event-id>.json`, outside the thread
+publication root. A local `.gitignore` also protects ordinary `git add` of new
+captures. Reads merge this store with legacy
+`.ai-collab/threads/<id>/human-events/` records without moving or deleting them.
+Identical retained copies display once; conflicts are reported, not overwritten.
 Atomic no-clobber publication and process locking prevent partial records and
-concurrent duplicates. Identical event/source retries are idempotent; changed
-content or recipients for an existing ID/source message are rejected. Timestamps
-are normalized to UTC, and sender/recipient stable identities at capture are retained (later alias remapping cannot rewrite historical mentions). A human
-event changes the task's message fingerprint, so recovery must re-read it.
+concurrent duplicates. Identical event/source retries are idempotent across both
+stores; changed content or recipients for an existing ID/source message are
+rejected. Timestamps are normalized to UTC, and sender/recipient stable identities
+at capture are retained (later alias remapping cannot rewrite historical
+mentions). Both stores change the task's message fingerprint, so recovery must
+re-read new human input.
+
+### Git-Sync Privacy Boundary
+
+`watch --git-sync` explicitly excludes legacy `human-events/` and its lock from
+both staging and path-scoped commits. This also excludes modifications to files
+that were already tracked or staged; existing staged human/business changes and
+working-copy bytes are preserved, never reset, untracked, or deleted.
+
+Before publishing, git-sync checks **all outgoing history**, not only the final
+tree, for known private paths (`.ai-collab/local/`, legacy thread human events and
+locks, and the old `.ai-collab/human-input.json` example source). A private event
+committed and then deleted still blocks publication. The actual single push URL
+and branch are inspected, including `pushurl`/`pushInsteadOf`, rather than trusting
+a fetch remote or stale tracking ref. Multiple destinations, unstable URL
+rewriting, unknown remote commits, or unavailable upstream checks fail closed.
+The checked commit and destination are pinned; automatic tags are not published.
+An alternate `pushRemote`/`remote.pushDefault`, explicit push refspecs, mirror or
+matching policies, or a mismatched simple/current upstream fails closed rather
+than silently publishing to a different branch or remote. Git replacement refs
+do not hide private commits from the history check. Git error output omits remote URLs and hook
+output so credentials or raw input are not copied into watcher messages.
+
+This is not a history scrubber or a universal content filter. **Previously
+pushed human data remains in the remote and its history.** An outgoing private
+commit requires a separate human-reviewed recovery decision; the watcher does
+not rewrite history, delete records, or remove files from the index. Explicit
+manual `git add -f` / `git commit` / `git push` can bypass these application
+safeguards. Original text copied into ordinary turns or arbitrary source files
+cannot be recognized automatically; keep supplied source files under
+`.ai-collab/local/` and do not paste private originals into shareable turns.
+No external conversation is automatically imported or intercepted.
 
 ## Shared Read APIs
 

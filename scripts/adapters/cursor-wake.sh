@@ -5,7 +5,6 @@
 set -eu
 
 INTERVAL="${COLLAB_INTERVAL:-30}"
-CHAT_ID="${CURSOR_CHAT_ID:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ROOT=$(CDPATH= cd -- "${1:-.}" && pwd)
 AGENT=${2:-${COLLAB_AGENT:-}}
@@ -14,23 +13,12 @@ if [ -z "$AGENT" ]; then
   exit 2
 fi
 
-wake() {
-  prompt=$1
-  if [ -n "$CHAT_ID" ]; then
-    agent -p --resume "$CHAT_ID" --force --trust "$prompt" || true
-  else
-    agent -p --force --trust "$prompt" || true
-  fi
-}
-
 run_once() {
   if [ -f "$ROOT/.ai-collab/STOP" ]; then
     printf '%s\n' "stopped"
     exit 0
   fi
-  if prompt=$(python3 "$SCRIPT_DIR/collab.py" inbox --root "$ROOT" --agent "$AGENT" --format prompt); then
-    wake "$prompt"
-  fi
+  python3 "$SCRIPT_DIR/wake_adapter.py" --tool cursor --root "$ROOT" --agent "$AGENT" || true
 }
 
 if [ "${COLLAB_ONCE:-}" = "1" ]; then

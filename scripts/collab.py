@@ -1025,24 +1025,129 @@ def run_git(root: Path, *arguments: str) -> subprocess.CompletedProcess:
 def git_pull(root: Path) -> None:
     result = run_git(root, "pull", "--rebase", "--autostash", "--quiet")
     if result.returncode != 0:
-        log_event("GIT_ERROR", operation="pull", detail=result.stderr.strip()[-500:])
+        log_event("GIT_ERROR", operation="pull", detail="pull failed; inspect Git locally (remote details omitted)")
+
+
+# Human originals are never part of automatic collaboration publication.
+# Exclusions protect the index/worktree even when files were previously tracked.
+_PRIVATE_GIT_PATHS = (
+    f"{WORKSPACE_DIR}/local",
+    f"{WORKSPACE_DIR}/human-input.json",
+    f":(glob){WORKSPACE_DIR}/threads/*/human-events",
+    f":(glob){WORKSPACE_DIR}/threads/*/human-events/**",
+    f":(glob){WORKSPACE_DIR}/threads/*/.human-events.lock",
+)
+
+
+def _git_sync_target(root: Path) -> Optional[Tuple[str, str, str]]:
+    branch = run_git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if branch.returncode != 0:
+        return None
+    name = branch.stdout.strip()
+    remote = run_git(root, "config", "--get", f"branch.{name}.remote")
+    merge = run_git(root, "config", "--get", f"branch.{name}.merge")
+    upstream = run_git(root, "rev-parse", "--verify", "@{upstream}^{commit}")
+    if any(result.returncode != 0 for result in (remote, merge, upstream)):
+        return None
+    if not remote.stdout.strip() or not merge.stdout.strip().startswith("refs/heads/"):
+        return None
+    remote_name, target_ref = remote.stdout.strip(), merge.stdout.strip()
+    if "\n" in remote_name or "\n" in target_ref:
+        return None
+    # Do not silently change an established fork/push target to the fetch
+    # upstream. Unsupported destination policies require human inspection.
+    for key in (f"branch.{name}.pushRemote", "remote.pushDefault"):
+        alternate = run_git(root, "config", "--get", key)
+        if alternate.returncode not in (0, 1) or (alternate.returncode == 0 and alternate.stdout.strip() != remote_name):
+            return None
+    refspecs = run_git(root, "config", "--get-all", f"remote.{remote_name}.push")
+    mirror = run_git(root, "config", "--bool", "--get", f"remote.{remote_name}.mirror")
+    policy = run_git(root, "config", "--get", "push.default")
+    if refspecs.returncode != 1 or mirror.returncode not in (0, 1) or mirror.stdout.strip() == "true" or policy.returncode not in (0, 1):
+        return None
+    push_default = policy.stdout.strip() if policy.returncode == 0 else "simple"
+    if push_default not in {"simple", "current", "upstream"} or (push_default in {"simple", "current"} and target_ref != "refs/heads/" + name):
+        return None
+    push_urls = run_git(root, "remote", "get-url", "--push", "--all", remote_name)
+    destinations = push_urls.stdout.splitlines()
+    if push_urls.returncode != 0 or len(destinations) != 1 or not destinations[0]:
+        return None  # Never check one recipient and publish to several others.
+    destination = destinations[0]
+    # get-url expands insteadOf/pushInsteadOf. Refuse chained rewriting that
+    # would redirect an explicit checked URL differently on read versus push.
+    read_url = run_git(root, "ls-remote", "--get-url", "--", destination)
+    temporary_remote = "collab-privacy-" + uuid.uuid4().hex
+    push_url = run_git(root, "-c", f"remote.{temporary_remote}.url={destination}", "remote", "-v")
+    prefix, suffix = temporary_remote + "\t", " (push)"
+    rewritten = [line[len(prefix):-len(suffix)] for line in push_url.stdout.splitlines()
+                 if line.startswith(prefix) and line.endswith(suffix)]
+    if read_url.returncode != 0 or push_url.returncode != 0 or read_url.stdout.strip() != destination or rewritten != [destination]:
+        return None
+    # A stale fetch tracking ref is not proof the actual push recipient has
+    # those ancestors. Inspect its tip, then pin this exact URL for the push.
+    advertised = run_git(root, "ls-remote", "--exit-code", "--refs", "--", destination, target_ref)
+    lines = advertised.stdout.splitlines()
+    if advertised.returncode != 0 or len(lines) != 1:
+        return None
+    fields = lines[0].split("\t")
+    if len(fields) != 2 or fields[1] != target_ref or not re.fullmatch(r"[0-9a-f]{40,64}", fields[0]):
+        return None
+    known = run_git(root, "cat-file", "-t", fields[0])
+    if known.returncode != 0 or known.stdout.strip() != "commit":
+        return None
+    return destination, target_ref, fields[0]
+
+
+def _git_sync_private_history(root: Path, upstream: str, head: str) -> bool:
+    # Inspect every outgoing ancestor, not just the final tree: a commit that
+    # adds private input and a later deletion still send the original object.
+    result = run_git(root, "--no-replace-objects", "log", "--full-history", "--format=%H", f"{upstream}..{head}", "--", *_PRIVATE_GIT_PATHS)
+    return result.returncode != 0 or bool(result.stdout.strip())
 
 
 def git_publish_thread(root: Path, thread_id: str, message: str) -> None:
+    validate_id(thread_id, "thread_id")
+    target = _git_sync_target(root)
+    if target is None:
+        log_event("GIT_ERROR", operation="privacy-check", detail="git-sync requires one verifiable upstream push destination; nothing published")
+        return
+    remote, branch, upstream = target
+    head = run_git(root, "rev-parse", "--verify", "HEAD^{commit}")
+    if head.returncode != 0 or _git_sync_private_history(root, upstream, head.stdout.strip()):
+        log_event("GIT_ERROR", operation="privacy-check", detail="outgoing history contains local/private human records or cannot be checked; nothing published; inspect locally without deleting records or rewriting history automatically")
+        return
     thread_path = f"{WORKSPACE_DIR}/threads/{thread_id}"
-    run_git(root, "add", "-A", "-f", "--", thread_path)
-    if run_git(root, "diff", "--cached", "--quiet", "--", thread_path).returncode == 0:
+    paths = (thread_path, f":(exclude){thread_path}/human-events", f":(exclude){thread_path}/.human-events.lock")
+    added = run_git(root, "add", "-A", "-f", "--", *paths)
+    if added.returncode != 0:
+        log_event("GIT_ERROR", operation="add", detail="could not stage shareable thread paths; nothing published")
         return
-    commit = run_git(root, "commit", "--quiet", "-m", message, "--", thread_path)
+    diff = run_git(root, "diff", "--cached", "--quiet", "--", *paths)
+    if diff.returncode == 0:
+        return
+    if diff.returncode != 1:
+        log_event("GIT_ERROR", operation="diff", detail="could not inspect staged thread paths; nothing published")
+        return
+    # Commit only the shareable pathspec. Existing staged private/business data
+    # stays staged and byte-identical; do not reset, untrack, or delete it.
+    commit = run_git(root, "commit", "--quiet", "-m", message, "--", *paths)
     if commit.returncode != 0:
-        log_event("GIT_ERROR", operation="commit", detail=commit.stderr.strip()[-500:])
+        log_event("GIT_ERROR", operation="commit", detail="commit failed; inspect Git locally (hook output omitted)")
         return
-    push = run_git(root, "push", "--quiet")
-    if push.returncode != 0:
-        git_pull(root)
-        push = run_git(root, "push", "--quiet")
-    if push.returncode != 0:
-        log_event("GIT_ERROR", operation="push", detail=push.stderr.strip()[-500:])
+    for attempt in range(2):
+        target = _git_sync_target(root)
+        head = run_git(root, "rev-parse", "--verify", "HEAD^{commit}")
+        if target is None or target[:2] != (remote, branch) or head.returncode != 0 or _git_sync_private_history(root, target[2], head.stdout.strip()):
+            log_event("GIT_ERROR", operation="privacy-check", detail="outgoing history or upstream changed unsafely; nothing published")
+            return
+        # Pin the checked commit and target; avoid push.default, configured
+        # extra refspecs, and follow-tags publishing unchecked refs.
+        push = run_git(root, "push", "--quiet", "--no-follow-tags", "--", remote, f"{head.stdout.strip()}:{branch}")
+        if push.returncode == 0:
+            return
+        if attempt == 0:
+            git_pull(root)
+    log_event("GIT_ERROR", operation="push", detail="push failed; inspect Git locally (remote details omitted)")
 
 
 class Watcher:

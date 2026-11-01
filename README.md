@@ -240,7 +240,7 @@ python /path/to/agent-collaboration/scripts/collab.py watch \
 The watcher stops when the thread is finished, when a `STOP` file appears,
 or when a round, wake, or retry limit is reached. Agent output is written to
 `.ai-collab/logs/`. Participants on different machines can share a thread
-through Git with `--agents backend --git-sync`. `--git-sync` publishes `.ai-collab/threads/` only, and only a human may turn it on. Participants do not commit product code unless the human explicitly asks. Review the generated
+through Git with `--agents backend --git-sync`. `--git-sync` publishes shareable `.ai-collab/threads/` artifacts only, excludes human-original records (including legacy paths), and requires a verifiable upstream. New human records stay local by default. Only a human may enable sync; existing published history is not erased. Participants do not commit product code unless the human explicitly asks. Review the generated
 `.ai-collab/wake.json` permissions before running unattended. See
 [Tool Adapters](references/tool-adapters.md#automatic-wake-up-with-collabpy-watch)
 for the configuration format and safety limits.
@@ -276,7 +276,7 @@ The web UI stays off until someone runs:
 python scripts/collab.py ui --root .
 ```
 
-It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. Conversation/task data refreshes with 刷新. Only live runner activity is polled; expired or unobservable execution is never shown as working. The interface is dark. Start it only when a human asks for the collaboration background or the web UI.
+It binds to `127.0.0.1:23451` on Windows, macOS, and Linux. The command probes that port first. A second run registers the current repository with the UI that is already running. Open `http://127.0.0.1:23451/` to see every registered project, its threads, and each participant across projects. Thread lists and the current conversation/task view refresh automatically, preserving reading position and expanded messages; 刷新 also remains available. Threads are ordered across projects by latest activity. Only fresh observed runner activity is shown as working; task phases never imply execution. The interface is dark. Start it only when a human asks for the collaboration background or the web UI.
 
 Run `python scripts/collab.py --help` for command options.
 

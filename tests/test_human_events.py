@@ -20,7 +20,8 @@ class HumanEventsTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.make_thread("feature", ["owner", "lead", "worker"])
-        self.directory = self.root / ".ai-collab/threads/feature/human-events"
+        self.directory = self.root / ".ai-collab/local/human-events/feature"
+        self.directory.parent.mkdir(parents=True)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -268,7 +269,7 @@ class HumanEventsTest(unittest.TestCase):
             target = Path(outside) / "outside.lock"
             target.write_text("preserve")
             try:
-                (self.directory.parent / ".human-events.lock").symlink_to(target)
+                (self.root / ".ai-collab/threads/feature/.human-events.lock").symlink_to(target)
             except (OSError, NotImplementedError):
                 self.skipTest("symlinks unavailable")
             with self.assertRaises(collab.CollaborationError):
@@ -294,7 +295,7 @@ class HumanEventsTest(unittest.TestCase):
             with self.assertRaises(collab.CollaborationError):
                 self.record()
         self.assertEqual(self.read(), {"events": [], "errors": []})
-        self.assertEqual(list(self.directory.iterdir()), [])
+        self.assertEqual([p.name for p in self.directory.iterdir()], [".gitignore"])
         self.assertEqual(self.record()["result"], "RECORDED")
 
     def test_concurrent_process_imports_deduplicate_atomically(self):

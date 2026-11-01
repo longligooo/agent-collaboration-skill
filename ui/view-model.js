@@ -55,6 +55,40 @@
       is_coordinator: turn.author === thread.coordinator, body: "", recipients: [], recipient_source: "unknown", provenance: null, legacy: true,
     }));
   }
+  function activityTime(value) {
+    // Match server legacy UTC handling; reject Date.parse's date rollover and
+    // permissive numeric/locale dates rather than putting malformed rows first.
+    if (typeof value !== "string") return NaN;
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/);
+    if (!match) return NaN;
+    const [, y, m, d, h = "0", min = "0", sec = "0", zone] = match;
+    const year = Number(y), month = Number(m), day = Number(d);
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (!year || month < 1 || month > 12 || day < 1 || day > days[month - 1] || Number(h) > 23 || Number(min) > 59 || Number(sec) > 59) return NaN;
+    let normalized = value.replace(" ", "T");
+    if (match[4] === undefined) normalized = `${y}-${m}-${d}T00:00:00${zone || "Z"}`;
+    else if (!zone) normalized += "Z";
+    const result = Date.parse(normalized);
+    return Number.isFinite(result) ? result : NaN;
+  }
+  function lastActivityAt(thread) {
+    const candidates = [thread?.last_activity_at, thread?.started_at, thread?.updated_at];
+    let latest = "", latestTime = -Infinity;
+    for (const value of candidates) {
+      const timestamp = activityTime(value);
+      if (Number.isFinite(timestamp) && timestamp > latestTime) { latest = value; latestTime = timestamp; }
+    }
+    return latest;
+  }
+  function sortThreads(threads) {
+    const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    return [...array(threads)].sort((a, b) => {
+      const left = activityTime(lastActivityAt(a)), right = activityTime(lastActivityAt(b));
+      const l = Number.isFinite(left) ? left : -Infinity, r = Number.isFinite(right) ? right : -Infinity;
+      return (l === r ? 0 : l > r ? -1 : 1) || compare(text(a.project_id), text(b.project_id)) || compare(text(a.thread_id), text(b.thread_id));
+    });
+  }
   function activeRuns(payload, now = Date.now(), humanIdentities = []) {
     const human = new Set(humanIdentities);
     return array(payload && payload.runs).filter(run => run && run.active === true && run.status === "running" && typeof run.identity === "string" && !!run.identity.trim() && !human.has(run.identity) && run.actor_type !== "human" && Number.isFinite(Date.parse(run.expires_at)) && Date.parse(run.expires_at) > now);
@@ -80,5 +114,5 @@
     if (["projects", "threads", "people"].includes(parts[0])) return { name: parts[0] };
     return { name: "overview" };
   }
-  return { array, text, hashIdentity, avatarSpec, participants, actorFor, isHumanEntry, recipients, history, activeRuns, activeRunFor, phaseLabel, categoryLabel, parseRoute };
+  return { array, text, hashIdentity, avatarSpec, participants, actorFor, isHumanEntry, recipients, history, activityTime, lastActivityAt, sortThreads, activeRuns, activeRunFor, phaseLabel, categoryLabel, parseRoute };
 });

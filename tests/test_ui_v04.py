@@ -26,9 +26,11 @@ class FakeNode {
   setAttribute(k,v){this.attributes[k]=String(v);if(k.startsWith('data-'))this.dataset[k.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=String(v);if(k==='open')this.open=true;}
   getAttribute(k){return Object.prototype.hasOwnProperty.call(this.attributes,k)?this.attributes[k]:null;}
   hasAttribute(k){return Object.prototype.hasOwnProperty.call(this.attributes,k);}
-  append(...values){for(let value of values){if(value instanceof FakeNode&&value.nodeType===11){this.append(...value.children);continue;}if(!(value instanceof FakeNode))value=new FakeNode('#text',String(value));value.parentNode=this;this.children.push(value);}}
-  replaceChildren(...values){this.children=[];this.append(...values);}
+  append(...values){for(let value of values){if(value instanceof FakeNode&&value.nodeType===11){this.append(...value.children);continue;}if(!(value instanceof FakeNode))value=new FakeNode('#text',String(value));if(value.parentNode)value.remove();value.parentNode=this;this.children.push(value);}}
+  replaceChildren(...values){for(const node of this.children)node.parentNode=null;this.children=[];this.append(...values);}
   remove(){if(this.parentNode)this.parentNode.children=this.parentNode.children.filter(n=>n!==this);this.parentNode=null;}
+  get disabled(){return this.hasAttribute('disabled');}set disabled(value){if(value)this.attributes.disabled='';else delete this.attributes.disabled;}
+  get isConnected(){for(let n=this;n;n=n.parentNode)if(n===root)return true;return false;}
   addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);}
   dispatch(name,event={}){for(const listener of this.listeners[name]||[])listener({target:this,...event});}
   get textContent(){return this.nodeType===3?this.valueText:this.children.map(n=>n.textContent).join('');}
@@ -49,9 +51,9 @@ function matches(node,selector){
   return (!tag||node.tagName===tag)&&(!id||node.getAttribute('id')===id)&&classes.split('.').filter(Boolean).every(c=>node.classList.contains(c))&&(!attr||(value===undefined?node.hasAttribute(attr):node.getAttribute(attr)===value));
 }
 const root=new FakeNode('div');root.setAttribute('id','app');
-const documentMock={hidden:false,activeElement:null,createElement:tag=>new FakeNode(tag),createElementNS:(_,tag)=>new FakeNode(tag),createTextNode:value=>new FakeNode('#text',value),createDocumentFragment:()=>new FakeNode('#fragment'),querySelector:selector=>selector==='#app'?root:root.querySelector(selector),querySelectorAll:selector=>root.querySelectorAll(selector),addEventListener(){}};
+const documentMock={hidden:false,activeElement:null,createElement:tag=>new FakeNode(tag),createElementNS:(_,tag)=>new FakeNode(tag),createTextNode:value=>new FakeNode('#text',value),createDocumentFragment:()=>new FakeNode('#fragment'),querySelector:selector=>selector==='#app'?root:root.querySelector(selector),querySelectorAll:selector=>root.querySelectorAll(selector),listeners:{},addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);},dispatch(name,event={}){for(const fn of this.listeners[name]||[])fn(event);}};
 const timers=[];
-const context=vm.createContext({window:{CollabUI:M,addEventListener(){}},document:documentMock,Node:FakeNode,location:{hash:'#/'},localStorage:{getItem(){return null;},setItem(){}},setTimeout(fn,delay){timers.push({fn,delay});return timers.length;},clearTimeout(){},AbortController,URLSearchParams,fetch(){throw new Error('Unexpected test network request');},assert,walk,root,timers});
+const context=vm.createContext({window:{CollabUI:M,listeners:{},addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);},dispatch(name,event={}){for(const fn of this.listeners[name]||[])fn(event);}},document:documentMock,Node:FakeNode,location:{hash:'#/'},localStorage:{getItem(){return null;},setItem(){}},setTimeout(fn,delay){timers.push({fn,delay});return timers.length;},clearTimeout(id){if(timers[id-1])timers[id-1].cleared=true;},AbortController,URLSearchParams,fetch(){throw new Error('Unexpected test network request');},assert,walk,root,timers});
 let appSource=fs.readFileSync(MODEL_PATH.replace(/view-model\.js$/,'app.js'),'utf8');
 appSource=appSource.replace(/\nload\(\);\s*\npollActivity\(\);\s*$/,'');
 vm.runInContext(appSource,context);
