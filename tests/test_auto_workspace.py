@@ -25,13 +25,23 @@ class WorkspaceTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.root), *args])
 
+    def head_binding(self):
+        # A clone of a detached source is legitimately detached too. Preserve
+        # the actual symbolic ref where present, otherwise the exact HEAD SHA.
+        result = subprocess.run(['git', '-C', str(self.root), 'symbolic-ref', '--quiet', 'HEAD'], capture_output=True)
+        if result.returncode == 0:
+            return ('branch', result.stdout)
+        if result.returncode == 1:
+            return ('detached', self.git('rev-parse', 'HEAD'))
+        result.check_returncode()
+
     def test_current_dirty_content_baseline_preserves_index_head_and_untracked(self):
         readme = self.root / 'README.md'
         readme.write_bytes(b'staged version\n'); self.git('add', 'README.md')
         readme.write_bytes(b'CURRENT working content\n')
         (self.root / 'new.bin').write_bytes(b'\x00\xff\x01')
         (self.root / 'gone.txt').write_text('new tracked then deleted'); self.git('add', 'gone.txt'); (self.root / 'gone.txt').unlink()
-        head, branch, index = self.git('rev-parse', 'HEAD'), self.git('symbolic-ref', 'HEAD'), (self.root / '.git/index').read_bytes()
+        head, branch, index = self.git('rev-parse', 'HEAD'), self.head_binding(), (self.root / '.git/index').read_bytes()
         self.assertTrue(capabilities(self.root)['supported'])
         workspace = self.manager.ensure(self.root, 'project', 'auto-task')
         checkout = Path(workspace['path']); baseline = checkout.parent / 'baseline'
@@ -50,7 +60,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual('modified', changes['new.bin']['kind']); self.assertTrue(changes['new.bin']['binary_or_large'])
         self.assertEqual('deleted', changes['SKILL.md']['kind']); self.assertEqual('added', changes['added.txt']['kind'])
         self.assertFalse(result['automatic']); self.assertEqual('pending', result['status'])
-        self.assertEqual(head, self.git('rev-parse', 'HEAD')); self.assertEqual(branch, self.git('symbolic-ref', 'HEAD'))
+        self.assertEqual(head, self.git('rev-parse', 'HEAD')); self.assertEqual(branch, self.head_binding())
         self.assertEqual(index, (self.root / '.git/index').read_bytes())
         self.assertEqual(b'CURRENT working content\n', readme.read_bytes())
         self.assertEqual(b'\x00\xff\x01', (self.root / 'new.bin').read_bytes())
