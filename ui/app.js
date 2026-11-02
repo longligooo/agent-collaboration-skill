@@ -25,13 +25,16 @@ const taskPending = new Set();
 const disclosureState = new Set();
 const scrollState = new Map();
 let contentGeneration = 0;
-let contentTimer = null;
+let contentLoading = false;
+let completedSnapshot = null;
+let completedVersion = null;
+const detailDirty = new Set();
+const taskDirty = new Set();
 let contentPaintTimer = null;
 let contentController = null;
 let contentSequence = 0;
 let contentSuspended = false;
 const contentRequests = new Map();
-const CONTENT_POLL_MS = 3000;
 const REQUEST_TIMEOUT_MS = 60000;
 let snapshotProgress = null;
 let reusableMessages = new Map();
@@ -298,7 +301,7 @@ function renderPeople() {
   })) : emptyState();
 }
 function renderPerson(id) { const person = people().find(item => personIdentity(item) === id); return person ? threadCards(M.array(person.threads)) : pendingEmpty("没有这个协作者。"); }
-function selectIdentity(identity) { selectedIdentity = identity; try { localStorage.setItem("collab.viewIdentity", identity); } catch (_) { /* Optional preference. */ } location.hash = taskHref(identity); if (route().id === identity) { render(); ensureRouteData(); } }
+function selectIdentity(identity) { selectedIdentity = identity; try { localStorage.setItem("collab.viewIdentity", identity); } catch (_) { /* Optional preference. */ } location.hash = taskHref(identity); if (route().id === identity) render(); }
 function taskCard(item) {
   const task = item.coding_task, checkpoint = task?.checkpoint || {};
   return h("a", { class: "task-card", href: threadHref(item.project_id, item.thread_id) }, h("div", { class: "task-id" }, `${item.project_name} · ${item.thread_id}`), h("h4", {}, item.topic), h("span", { class: `task-tag ${item.classification}` }, task ? M.phaseLabel(task.phase) : "旧版线程"), h("p", {}, item.next_action || "下一步尚未提供，请查看协作记录。"), h("div", { class: "task-context" }, h("b", {}, "已保存的上下文"), h("p", {}, checkpoint.summary || (checkpoint.waiting_on ? `等待 ${checkpoint.waiting_on.identity || checkpoint.waiting_on.kind}` : item.objective || "任务发现不会标记通知已读。")), task?.recovery?.needs_recheck ? h("p", { class: "warning" }, "上下文已变化，恢复前需要复核。") : null), h("span", { class: "task-open" }, item.classification === "actionable" ? "查看恢复点 →" : "查看等待原因 →"));
@@ -414,7 +417,10 @@ function render() {
 }
 async function getJSON(url, signal) {
   const response = await fetch(url, { cache: "no-store", signal });
-  if (!response.ok) throw new Error(`读取失败（${response.status}）`);
+  if (!response.ok) {
+    const snapshotErrors = { 409: "本次增量读取未完成，请点击刷新重试", 410: "分批读取游标已过期，请点击刷新重试", 413: "记录超过增量缓存容量，需减少读取范围或调整服务端容量", 503: "读取繁忙，请稍后点击刷新重试" };
+    throw new Error(url.startsWith("/api/snapshot") && snapshotErrors[response.status] || `读取失败（${response.status}）`);
+  }
   return response.json();
 }
 function contentSignature(payload) {
@@ -437,7 +443,8 @@ async function ensureRouteData({ force = false, background = false } = {}) {
   const key = isThread ? routeKey(current.projectId, current.threadId) : identity;
   const requestKey = JSON.stringify([isThread ? "thread" : "tasks", key]);
   const cache = isThread ? details : tasks, failures = isThread ? detailErrors : taskErrors, pending = isThread ? detailPending : taskPending;
-  if (!force && (cache.has(key) || pending.has(key))) return;
+  const dirty = isThread ? detailDirty : taskDirty;
+  if (!force && (pending.has(key) || (cache.has(key) && !dirty.has(key) && !failures.has(key)))) return;
   contentRequests.get(requestKey)?.controller.abort();
   const request = { controller: new AbortController() };
   contentRequests.set(requestKey, request); pending.add(key);
@@ -453,7 +460,7 @@ async function ensureRouteData({ force = false, background = false } = {}) {
     const value = isThread ? payload?.thread : payload;
     if (!value || (isThread && (value.project_id !== current.projectId || value.thread_id !== current.threadId))) throw new Error("返回的记录数据格式无效");
     changed = contentSignature(cache.get(key)) !== contentSignature(value) || failures.has(key);
-    cache.set(key, value); failures.delete(key);
+    cache.set(key, value); failures.delete(key); dirty.delete(key);
   } catch (exc) {
     // A timeout is a read failure; superseded or hidden-page requests are not.
     if (generation === contentGeneration && contentRequests.get(requestKey) === request) {
@@ -469,10 +476,6 @@ async function ensureRouteData({ force = false, background = false } = {}) {
       if (sameRoute && (changed || (firstLoad && !background))) render();
     }
   }
-}
-function scheduleContent() {
-  clearTimeout(contentTimer);
-  if (!document.hidden && !contentSuspended) contentTimer = setTimeout(() => load({ background: true }), CONTENT_POLL_MS);
 }
 // Partial reads must never turn a missing row into a deletion. Only a complete
 // generation replaces the old snapshot; each cumulative batch overlays by identity.
@@ -522,16 +525,32 @@ function appendSnapshotBatch(previous, batch) {
   };
   return combined;
 }
-async function load({ background = false } = {}) {
+function invalidateRouteRead(kind, key) {
+  const requestKey = JSON.stringify([kind, key]);
+  const request = contentRequests.get(requestKey);
+  if (request) { request.controller.abort(); contentRequests.delete(requestKey); }
+  (kind === "thread" ? detailPending : taskPending).delete(key);
+  (kind === "thread" ? detailDirty : taskDirty).add(key);
+}
+function pruneSnapshot(base, sync) {
+  const projects = new Set(sync.project_ids);
+  const removed = new Set(sync.removed.map(item => routeKey(item.project_id, item.thread_id)));
+  return { ...base, projects: base.projects.filter(project => projects.has(project.id)).map(project => ({ ...project,
+    threads: M.array(project.threads).filter(thread => !removed.has(routeKey(project.id, thread.thread_id))),
+  })) };
+}
+async function load({ background = false, reason = "refresh" } = {}) {
   if (document.hidden || contentSuspended) return;
-  clearTimeout(contentTimer); clearTimeout(contentPaintTimer); contentPaintTimer = null;
+  // Navigation shares an in-flight scan; it only changes which route detail is needed.
+  if (reason === "navigation" && contentLoading) { render(); return ensureRouteData({ background: true }); }
+  contentLoading = true; clearTimeout(contentPaintTimer); contentPaintTimer = null;
   const sequence = ++contentSequence;
   contentController?.abort(); cancelContentRequests();
   const controller = new AbortController(); contentController = controller;
   const previous = snapshot;
   loading = !background;
   if (!background) render();
-  let changed = false, routeRead = null, accumulated = null;
+  let changed = false, routeRead = null, accumulated = null, syncPlan = null;
   let lastBatchRender = 0, lastPaintedLoaded = 0;
   const requestedRoutes = new Set();
   const valid = () => sequence === contentSequence && !controller.signal.aborted;
@@ -541,7 +560,7 @@ async function load({ background = false } = {}) {
     render(); lastBatchRender = Date.now(); lastPaintedLoaded = snapshotProgress?.loaded || 0;
   };
   try {
-    let url = "/api/snapshot?progressive=1";
+    let url = `/api/snapshot?${new URLSearchParams({ progressive: "1", ...(completedVersion ? { since: completedVersion } : {}) })}`;
     const cursors = new Set();
     while (url) {
       // Each batch has its own deadline: a large scan may legitimately need
@@ -552,14 +571,42 @@ async function load({ background = false } = {}) {
       finally { clearTimeout(timeout); }
       if (!valid()) return;
       if (!payload || !Array.isArray(payload.projects)) throw new Error("返回的项目数据格式无效");
-      const { progress, ...content } = payload;
+      const { progress, sync, ...content } = payload;
       if (progress && (typeof progress.complete !== "boolean" || !Number.isInteger(progress.loaded) || !Number.isInteger(progress.total) || progress.loaded < 0 || progress.total < progress.loaded || (!progress.complete && (typeof progress.cursor !== "string" || !progress.cursor || cursors.has(progress.cursor))))) throw new Error("返回的分批读取进度无效");
       const partial = progress && !progress.complete;
-      accumulated = progress?.delta ? appendSnapshotBatch(accumulated, content) : content;
+      if (sync) {
+        if (!syncPlan) {
+          if (typeof sync.reset !== "boolean" || !Array.isArray(sync.changed) || !Array.isArray(sync.removed) || !Array.isArray(sync.project_ids) || (!sync.reset && (!completedSnapshot || sync.base_version !== completedVersion))) throw new Error("返回的增量基线无效，请刷新重试");
+          syncPlan = sync;
+          accumulated = sync.reset ? null : pruneSnapshot(completedSnapshot, sync);
+          const affected = [...sync.changed, ...sync.removed];
+          const dirtyThreads = new Set(affected.map(item => routeKey(item.project_id, item.thread_id)));
+          if (sync.reset) for (const key of [...details.keys(), ...detailPending]) dirtyThreads.add(key);
+          // A detail request begun before this change set was known cannot clear
+          // the new invalidation when its old response eventually arrives.
+          for (const key of dirtyThreads) invalidateRouteRead("thread", key);
+          const metadata = value => JSON.stringify(M.array(value?.projects).map(({ threads, ...project }) => project));
+          if (sync.reset || affected.length || metadata(completedSnapshot) !== metadata(content)) {
+            for (const key of new Set([...tasks.keys(), ...taskPending])) invalidateRouteRead("tasks", key);
+          }
+        }
+        accumulated = mergeSnapshot(accumulated, content);
+        if (!partial) {
+          if (typeof sync.version !== "string" || !sync.version || !sync.summary || !Array.isArray(sync.summary.collaborators) || !sync.summary.overview) throw new Error("返回的增量完成状态无效");
+          accumulated = { ...accumulated, ...sync.summary };
+        }
+      } else {
+        accumulated = progress?.delta ? appendSnapshotBatch(accumulated, content) : content;
+      }
       const next = partial ? mergeSnapshot(previous, accumulated) : accumulated;
       const nextProgress = partial ? progress : null;
       changed = contentSignature(snapshot) !== contentSignature(next) || !!error || JSON.stringify(snapshotProgress) !== JSON.stringify(nextProgress);
       snapshot = next; snapshotProgress = nextProgress; error = "";
+      if (!partial) {
+        completedSnapshot = next; completedVersion = sync?.version || null;
+        const remaining = new Set(next.projects.flatMap(project => M.array(project.threads).map(thread => routeKey(project.id, thread.thread_id))));
+        for (const key of details.keys()) if (!remaining.has(key)) { details.delete(key); detailErrors.delete(key); detailDirty.delete(key); }
+      }
       // Bound DOM rebuild frequency for fast local pages, but paint the first
       // real records immediately and always paint the final result.
       if (changed && (!partial || !lastBatchRender || (!lastPaintedLoaded && progress.loaded) || Date.now() - lastBatchRender >= 100)) {
@@ -574,7 +621,7 @@ async function load({ background = false } = {}) {
       const routeReadKey = current.name === "thread" ? JSON.stringify(["thread", current.projectId, current.threadId]) : current.name === "tasks" && identity ? JSON.stringify(["tasks", identity]) : null;
       if (routeReadKey && !requestedRoutes.has(routeReadKey)) {
         requestedRoutes.add(routeReadKey);
-        routeRead = ensureRouteData({ force: true, background });
+        routeRead = ensureRouteData({ force: !sync, background });
       }
       if (!partial) break;
       cursors.add(progress.cursor);
@@ -582,25 +629,25 @@ async function load({ background = false } = {}) {
     }
   } catch (exc) {
     if (sequence !== contentSequence) return;
-    const message = `${exc.name === "AbortError" ? "读取超时" : exc.message || "无法读取协作数据"}。已加载记录可能不是最新状态。`;
+    const message = `${exc.name === "AbortError" ? "读取超时" : exc.message || "无法读取协作数据"}。保留已加载记录；已加载记录可能不是最新状态。`;
     changed = error !== message; error = message;
   } finally {
     if (sequence === contentSequence) {
       clearTimeout(contentPaintTimer); contentPaintTimer = null;
-      loading = false;
+      loading = false; contentLoading = false;
       if (changed || !background) render();
       else {
         const stamp = document.querySelector(".snapshot-time"); if (stamp && snapshot) stamp.textContent = `更新于 ${formatTime(snapshot.generated_at)}`;
         const refresh = document.querySelector(".refresh"); if (refresh) { refresh.disabled = false; refresh.textContent = "刷新"; }
       }
-      await (routeRead || ensureRouteData({ force: true, background }));
-      if (sequence === contentSequence) scheduleContent();
+      await (routeRead || ensureRouteData({ background }));
     }
   }
 }
 
 function pauseContent() {
-  clearTimeout(contentTimer); clearTimeout(contentPaintTimer); contentPaintTimer = null; contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
+  if (contentLoading) error = "读取已暂停。已加载记录可能不是最新状态，请刷新重试。";
+  contentLoading = false; clearTimeout(contentPaintTimer); contentPaintTimer = null; contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
 }
 function paintActivity() {
   document.querySelectorAll(".avatar[data-avatar-id]").forEach(decorateAvatar);
@@ -636,9 +683,9 @@ async function pollActivity() {
     if (sequence === activitySequence) { paintActivity(); if (!document.hidden) activityTimer = setTimeout(pollActivity, 2000); }
   }
 }
-window.addEventListener("hashchange", () => { messageFilter = "all"; mobileThreads = false; render(); ensureRouteData({ force: true }); });
-document.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(activityTimer); activitySequence += 1; activityController?.abort(); pauseContent(); } else { paintActivity(); pollActivity(); load({ background: true }); } });
+window.addEventListener("hashchange", () => { messageFilter = "all"; mobileThreads = false; render(); load({ background: true, reason: "navigation" }); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(activityTimer); activitySequence += 1; activityController?.abort(); pauseContent(); } else { render(); pollActivity(); } });
 window.addEventListener("pagehide", () => { contentSuspended = true; pauseContent(); clearTimeout(activityTimer); clearTimeout(expiryTimer); activitySequence += 1; activityController?.abort(); });
-window.addEventListener("pageshow", event => { if (event.persisted) { contentSuspended = false; pollActivity(); load({ background: true }); } });
+window.addEventListener("pageshow", event => { if (event.persisted) { contentSuspended = false; render(); pollActivity(); } });
 load();
 pollActivity();

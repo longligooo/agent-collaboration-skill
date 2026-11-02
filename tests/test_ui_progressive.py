@@ -99,12 +99,12 @@ let signal,respond;fetch=(url,options)=>new Promise((resolve,reject)=>{signal=op
 const read=mode==='snapshot'?load({background:true}):ensureRouteData({force:true,background:true});
 advance(6360);assert.equal(signal.aborted,false,mode+' must accept the reported 6.36s latency');
 respond(response(mode==='snapshot'?snap():mode==='thread'?{thread:thread()}:{items:[]}));await read;
-clearTimeout(contentTimer);
+
 const slow=mode==='snapshot'?load({background:true}):ensureRouteData({force:true,background:true});
 advance(59999);assert.equal(signal.aborted,false,mode+' must not timeout early');
 advance(1);assert.equal(signal.aborted,true,mode+' must timeout at60s');
 await slow;assert(mode==='snapshot'?error.includes('读取超时'):mode==='thread'?detailErrors.get(routeKey('p','same'))==='读取超时':taskErrors.get('agent')==='读取超时');
-clearTimeout(contentTimer);
+
 }
 assert.equal(REQUEST_TIMEOUT_MS,60000);
 })();

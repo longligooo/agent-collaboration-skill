@@ -23,9 +23,11 @@ class ProgressiveSnapshotTests(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.registry = self.base / 'registry.json'
         ui_server.SNAPSHOT_SESSIONS.clear()
+        ui_server.SNAPSHOT_VERSIONS.clear()
 
     def tearDown(self):
         ui_server.SNAPSHOT_SESSIONS.clear()
+        ui_server.SNAPSHOT_VERSIONS.clear()
         self.tmp.cleanup()
 
     def project(self, name, count, timestamp='2026-01-01T00:00:00Z'):

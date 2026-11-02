@@ -1,4 +1,4 @@
-"""Automatic read refresh tests against production app.js (no browser package needed)."""
+"""Triggered read refresh tests against production app.js (no browser package needed)."""
 import json
 import subprocess
 import unittest
@@ -19,8 +19,8 @@ class UiRefreshTests(unittest.TestCase):
     def run_dom(self, source):
         script = ('"use strict";const assert=require("node:assert/strict");'
                   f'const M=require({json.dumps(str(MODEL))});const MODEL_PATH={json.dumps(str(MODEL))};\n'
-                  + DOM_HARNESS + '\nPromise.resolve(vm.runInContext('
-                  + json.dumps(FIXTURE + source) + ',context)).catch(error=>{console.error(error);process.exitCode=1;});')
+                  + DOM_HARNESS + '\nlet settled=false;process.on("beforeExit",()=>{if(!settled){console.error("UI test promise did not settle");process.exitCode=1;}});Promise.resolve(vm.runInContext('
+                  + json.dumps(FIXTURE + source) + ',context)).then(()=>{settled=true;}).catch(error=>{settled=true;console.error(error);process.exitCode=1;});')
         result = subprocess.run([NODE, '-'], input=script, text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, f'{result.stdout}\n{result.stderr}')
 
@@ -37,7 +37,7 @@ assert.equal(formatDuration('2026-10-30T14:00:00Z','2026-10-30T15:00:00Z'),'1 �
 assert.notEqual(clockTime('2026-10-30T15:00:00Z'),'时间未提供');
 ''')
 
-    def test_unchanged_poll_does_not_remount_and_only_sampling_time_changes(self):
+    def test_unchanged_refresh_does_not_remount_and_only_sampling_time_changes(self):
         self.run_dom(r'''
 (async()=>{
 const shell=root.children[0], message=document.querySelector('.message[data-message-key]');
@@ -46,7 +46,7 @@ await load({background:true});
 assert.equal(count,2);assert.equal(root.children[0],shell);
 assert.equal(document.querySelector('.message[data-message-key]'),message);
 assert.equal(document.querySelector('.snapshot-time').textContent, '更新于 '+formatTime('2026-01-02T00:00:00Z'));
-assert(timers.some(t=>!t.cleared&&t.delay===CONTENT_POLL_MS));
+assert(!timers.some(t=>!t.cleared&&t.delay===3000));
 })();
 ''')
 
@@ -167,16 +167,16 @@ const shell=root.children[0];await load({background:true});assert.equal(root.chi
 })();
 ''')
 
-    def test_hidden_page_discards_late_response_and_resume_refreshes_immediately(self):
+    def test_hidden_page_discards_late_response_and_resume_only_restarts_activity(self):
         self.run_dom(r'''
 (async()=>{
 const waiting=[];fetch=url=>new Promise(resolve=>waiting.push({url,resolve}));
 const old=load({background:true});document.hidden=true;document.dispatch('visibilitychange');
 waiting[0].resolve(response(snap([thread('p',[entry('late-hidden')])])));await old;
 assert.equal(details.get(routeKey('p','same')).history[0].id,'one');
-assert(!timers.some(t=>!t.cleared&&t.delay===CONTENT_POLL_MS));
+assert(!timers.some(t=>!t.cleared&&t.delay===3000));
 const count=waiting.length;document.hidden=false;document.dispatch('visibilitychange');
-assert.equal(waiting.length,count+2); // activity + snapshot
+assert.equal(waiting.length,count+1); // activity only, no content scan
 pauseContent();activitySequence+=1;activityController.abort();
 })();
 ''')
@@ -202,6 +202,6 @@ window.dispatch('pagehide');assert.equal(contentSuspended,true);
 let calls=0;fetch=async url=>{calls++;return response(url==='/api/activity'?{runs:[]}:url.startsWith('/api/snapshot')?snap():{thread:thread()});};
 await load({background:true});assert.equal(calls,0);
 window.dispatch('pageshow',{persisted:true});await new Promise(resolve=>Promise.resolve().then(resolve));
-assert.equal(contentSuspended,false);assert(calls>=2);
+assert.equal(contentSuspended,false);assert.equal(calls,1);
 })();
 ''')

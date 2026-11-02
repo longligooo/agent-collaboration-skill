@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import threading
@@ -351,9 +352,9 @@ def snapshot_from_projects(projects: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-# Sessions retain project metadata, the frozen work list and one delta replay
-# response only. Scanned thread records are not accumulated on the server. Locks never cover activity/detail requests. Files are read live,
-# but the registry and thread work list are frozen for each refresh generation.
+# Active sessions retain one delta replay and a copy-on-write record index.
+# Completed versions reuse unchanged projections after metadata-only checks.
+# No scan/version lock covers activity or detail requests.
 SNAPSHOT_BATCH_SIZE = 8
 SNAPSHOT_BATCH_SECONDS = 0.1
 SNAPSHOT_SESSION_TTL = 120
@@ -361,6 +362,11 @@ SNAPSHOT_MAX_SESSIONS = 4
 SNAPSHOT_WORKERS = threading.BoundedSemaphore(2)
 SNAPSHOT_SESSIONS_LOCK = threading.Lock()
 SNAPSHOT_SESSIONS: Dict[str, Dict[str, Any]] = {}
+SNAPSHOT_VERSIONS: Dict[str, Dict[str, Any]] = {}
+SNAPSHOT_VERSION_TTL = 900
+SNAPSHOT_MAX_VERSIONS = 4
+SNAPSHOT_MAX_VERSION_BYTES = 32 * 1024 * 1024
+SNAPSHOT_MAX_CACHE_BYTES = 64 * 1024 * 1024
 
 
 class SnapshotRequestError(ValueError):
@@ -369,9 +375,141 @@ class SnapshotRequestError(ValueError):
         self.status = status
 
 
-def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = None) -> Dict[str, Any]:
+def metadata_fingerprint(root: Path, relative: str, *, exclude=()) -> str:
+    """Hash metadata only, including in-repository symlink targets.
+
+    Resolve links component by component: reject an external target before any
+    target access, bound link chains/cycles, and never read source/private bodies.
+    ctime/inode detect restored-mtime rewrites and atomic replacements.
+    """
+    root = root.resolve()
+    if Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise collab.CollaborationError("invalid fingerprint path")
+    entries, visited = [], set()
+
+    def local_target(path: Path):
+        parts = path.relative_to(root).parts
+        links = set()
+        while True:
+            cursor = root
+            restarted = False
+            for index, component in enumerate(parts):
+                cursor = cursor / component
+                try:
+                    info = cursor.lstat()
+                except FileNotFoundError:
+                    return root.joinpath(*parts)
+                if not stat.S_ISLNK(info.st_mode):
+                    continue
+                name = cursor.relative_to(root).as_posix()
+                entries.append((name, "link", info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino))
+                if name in links or len(links) >= 40:
+                    entries.append((name, "cycle"))
+                    return None
+                links.add(name)
+                target = Path(os.path.normpath(str(cursor.parent / os.readlink(cursor))))
+                try:
+                    target_parts = target.relative_to(root).parts
+                except ValueError:
+                    entries.append((name, "external"))
+                    return None
+                parts = target_parts + parts[index + 1:]
+                restarted = True
+                break
+            if not restarted:
+                return cursor
+
+    def visit(path: Path):
+        target = local_target(path)
+        if target is None or target in visited:
+            return
+        visited.add(target)
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            entries.append((target.relative_to(root).as_posix(), "missing"))
+            return
+        entries.append((target.relative_to(root).as_posix(), info.st_mode, info.st_size,
+                        info.st_mtime_ns, info.st_ctime_ns, info.st_ino))
+        if stat.S_ISDIR(info.st_mode):
+            for child in sorted(target.iterdir()):
+                if child.name not in exclude:
+                    visit(child)
+
+    visit(root / relative)
+    return hashlib.sha256(repr(entries).encode()).hexdigest()
+
+
+def project_config_fingerprint(root: Path) -> str:
+    return hashlib.sha256(repr((root.is_dir(), metadata_fingerprint(root, ".ai-collab/identities.json"),
+                               metadata_fingerprint(root, ".ai-collab/wake.json"))).encode()).hexdigest()
+
+
+def project_code_fingerprint(root: Path) -> str:
+    """Metadata equivalent of task_model.code_version's selected source set.
+
+    Git membership matters even without content changes (e.g. force-adding an
+    ignored file). Read-only ls-files/rev-parse also handle linked worktrees.
+    """
+    listing = subprocess.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if listing.returncode:
+        if (root / ".git").exists():
+            raise collab.CollaborationError("Git could not enumerate source metadata")
+        return metadata_fingerprint(root, ".", exclude={".git", ".ai-collab", "__pycache__"})
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    values = [head.stdout.decode("ascii", errors="replace").strip()]
+    for name in sorted({os.fsdecode(value) for value in listing.stdout.split(b"\0") if value}):
+        if name.split("/", 1)[0] in {".git", ".ai-collab"}:
+            continue
+        target, linked = root, False
+        for component in Path(name).parts:
+            if component in {"..", "/"}:
+                raise collab.CollaborationError("invalid source metadata path")
+            target = target / component
+            if target.is_symlink():
+                linked = True
+                break
+        if not linked and target.is_dir() and (target / ".git").exists():
+            value = project_code_fingerprint(target)
+        else:
+            value = metadata_fingerprint(root, name)
+        values.append((name, value))
+    return hashlib.sha256(repr(values).encode()).hexdigest()
+
+
+def thread_fingerprint(root: Path, thread_id: str, project: dict, code: Optional[str], previous: Optional[dict] = None) -> str:
+    collab.validate_id(thread_id, "thread_id")
+    values = [metadata_fingerprint(root, f".ai-collab/threads/{thread_id}"),
+              metadata_fingerprint(root, f".ai-collab/local/human-events/{thread_id}"),
+              metadata_fingerprint(root, ".ai-collab/identities.json"),
+              metadata_fingerprint(root, ".ai-collab/wake.json"), code,
+              {key: value for key, value in project.items() if key != "threads"}]
+    # Evidence may live outside the thread, including ignored .ai-collab paths.
+    for evidence in (previous or {}).get("coding_task", {}).get("evidence", []) if (previous or {}).get("coding_task") else []:
+        if isinstance(evidence.get("log"), str):
+            checked = collab.resolve_repo_path(root, evidence["log"], label="evidence fingerprint")
+            values.append(metadata_fingerprint(root, checked.relative_to(root).as_posix()))
+    return hashlib.sha256(repr(values).encode()).hexdigest()
+
+
+def _version_summary(session: dict) -> dict:
+    projects = [{**project, "threads": []} for project in session["projects"]]
+    by_id = {project["id"]: project for project in projects}
+    for (project_id_value, _), record in session["records"].items():
+        by_id[project_id_value]["threads"].append(record)
+    for project in projects:
+        project["threads"].sort(key=ui_read_model.thread_sort_key)
+    result = snapshot_from_projects(projects)
+    return {"collaborators": result["collaborators"], "overview": result["overview"]}
+
+
+def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = None, since: Optional[str] = None) -> Dict[str, Any]:
     if cursor is not None and not re.fullmatch(r"[0-9a-f]{32}:[0-9]{1,12}", cursor):
         raise SnapshotRequestError("invalid snapshot cursor", 400)
+    if since is not None and (cursor is not None or not re.fullmatch(r"[0-9a-f]{32}", since)):
+        raise SnapshotRequestError("invalid snapshot version", 400)
     if not SNAPSHOT_WORKERS.acquire(blocking=False):
         raise SnapshotRequestError("snapshot readers busy; retry shortly", 503)
     session = None
@@ -380,37 +518,68 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
         now = time.monotonic()
         batch_projects = {}
         if cursor is None:
-            registry = load_registry(path or registry_path())
-            projects = [project_shell(entry) for entry in registry["projects"]]
-            queues = []
+            registry_file = path or registry_path()
+            origin = str(registry_file.resolve())
+            with SNAPSHOT_SESSIONS_LOCK:
+                for key in list(SNAPSHOT_VERSIONS):
+                    if now - SNAPSHOT_VERSIONS[key]["touched"] > SNAPSHOT_VERSION_TTL:
+                        del SNAPSHOT_VERSIONS[key]
+                baseline = SNAPSHOT_VERSIONS.get(since)
+                if baseline and baseline["origin"] != origin:
+                    baseline = None
+                if baseline:
+                    baseline["touched"] = now
+            registry = load_registry(registry_file)
+            projects, configs = [], {}
+            for entry in registry["projects"]:
+                root = Path(entry["root"])
+                before_config = project_config_fingerprint(root)
+                project = project_shell(entry)
+                if project_config_fingerprint(root) != before_config:
+                    raise SnapshotRequestError("project configuration changed while reading; refresh again", 409)
+                projects.append(project)
+                configs[project["id"]] = before_config
+            queues, fingerprints, records, codes = [], {}, {}, {}
+            old_records = baseline["records"] if baseline else {}
             for project in projects:
-                ids = []
-                if project["available"]:
-                    try:
-                        ids = collab.list_thread_ids(Path(project["root"]))
-                    except collab.CollaborationError as exc:
-                        project["error"] = str(exc)
-                queues.append([(project, thread_id) for thread_id in ids])
-            # Interleave projects so a large first project cannot hide all others.
+                root = Path(project["root"])
+                if project.get("error") or project.get("identity_error"):
+                    raise SnapshotRequestError("project metadata could not be read; refresh again", 409)
+                if not project["available"] and any(key[0] == project["id"] for key in old_records):
+                    raise SnapshotRequestError("registered project is unavailable; retaining previous version", 409)
+                ids = collab.list_thread_ids(root) if project["available"] else []
+                has_tasks = any((root / f".ai-collab/threads/{tid}/task.json").exists() for tid in ids)
+                code = project_code_fingerprint(root) if has_tasks else None
+                codes[project["id"]] = code
+                work = []
+                for thread_id in ids:
+                    key = (project["id"], thread_id)
+                    fingerprint = thread_fingerprint(root, thread_id, project, code, old_records.get(key))
+                    fingerprints[key] = fingerprint
+                    if baseline and baseline["fingerprints"].get(key) == fingerprint:
+                        records[key] = old_records[key]
+                    else:
+                        work.append((project, thread_id))
+                queues.append(work)
             work = [queue[index] for index in range(max(map(len, queues), default=0))
                     for queue in queues if index < len(queue)]
             token = secrets.token_hex(16)
             session = {"projects": projects, "work": work, "offset": 0,
                        "touched": now, "lock": threading.Lock(), "last_cursor": None,
-                       "last_payload": None, "token": token}
+                       "last_payload": None, "token": token, "origin": origin,
+                       "records": records, "fingerprints": fingerprints, "codes": codes, "configs": configs,
+                       "record_bytes": {key: baseline["record_bytes"][key] for key in records} if baseline else {},
+                       "base_version": since if baseline else None, "reset": baseline is None,
+                       "removed": [{"project_id": key[0], "thread_id": key[1]} for key in old_records if key not in fingerprints]}
             session["lock"].acquire()
             locked = True
             with SNAPSHOT_SESSIONS_LOCK:
-                # Never evict an in-flight scan. Prefer expired/completed views;
-                # otherwise evict the oldest idle session (e.g. a closed tab).
                 candidates = sorted(SNAPSHOT_SESSIONS, key=lambda key: (
                     SNAPSHOT_SESSIONS[key]["offset"] < len(SNAPSHOT_SESSIONS[key]["work"]),
                     SNAPSHOT_SESSIONS[key]["touched"]))
                 for key in candidates:
                     old = SNAPSHOT_SESSIONS[key]
-                    if old["lock"].locked():
-                        continue
-                    if now - old["touched"] > SNAPSHOT_SESSION_TTL or len(SNAPSHOT_SESSIONS) >= SNAPSHOT_MAX_SESSIONS:
+                    if not old["lock"].locked() and (now - old["touched"] > SNAPSHOT_SESSION_TTL or len(SNAPSHOT_SESSIONS) >= SNAPSHOT_MAX_SESSIONS):
                         del SNAPSHOT_SESSIONS[key]
                 if len(SNAPSHOT_SESSIONS) >= SNAPSHOT_MAX_SESSIONS:
                     raise SnapshotRequestError("snapshot sessions busy; retry shortly", 503)
@@ -426,6 +595,8 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
                 locked = session["lock"].acquire(blocking=False)
             if not locked:
                 raise SnapshotRequestError("snapshot page already being read; retry shortly", 503)
+            if session.get("failed"):
+                raise SnapshotRequestError("snapshot changed while reading; start a new refresh", 409)
             session["touched"] = now
             if cursor == session["last_cursor"]:
                 return copy.deepcopy(session["last_payload"])
@@ -435,7 +606,27 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
             stop = min(len(session["work"]), session["offset"] + SNAPSHOT_BATCH_SIZE)
             while session["offset"] < stop:
                 project, thread_id = session["work"][session["offset"]]
-                record = scan_thread(Path(project["root"]), thread_id, project)
+                root, key = Path(project["root"]), (project["id"], thread_id)
+                if project_config_fingerprint(root) != session["configs"][project["id"]]:
+                    session["failed"] = True
+                    raise SnapshotRequestError("project configuration changed while reading; refresh again", 409)
+                task_path = collab.resolve_repo_path(root, f".ai-collab/threads/{thread_id}/task.json", label="task fingerprint")
+                task_dependencies = {"coding_task": collab.read_json(task_path, "task fingerprint")} if task_path.is_file() else None
+                before = thread_fingerprint(root, thread_id, project, session["codes"][project["id"]], task_dependencies)
+                record = scan_thread(root, thread_id, project)
+                after = thread_fingerprint(root, thread_id, project, session["codes"][project["id"]], task_dependencies)
+                if before != after or record.get("error") or record.get("projection_error") or record.get("history_errors") or any(turn.get("error") for turn in record.get("turns", [])):
+                    session["failed"] = True
+                    raise SnapshotRequestError("thread changed or failed while reading; refresh again", 409)
+                # Include newly discovered evidence dependencies only after a stable
+                # scan; initial metadata still forces a future scan if it changed.
+                session["fingerprints"][key] = thread_fingerprint(root, thread_id, project, session["codes"][project["id"]], record)
+                record_size = len(json.dumps(record, ensure_ascii=False).encode())
+                if sum(session["record_bytes"].values()) - session["record_bytes"].get(key, 0) + record_size > SNAPSHOT_MAX_VERSION_BYTES:
+                    session["failed"] = True
+                    raise SnapshotRequestError("snapshot exceeds the incremental cache limit", 413)
+                session["record_bytes"][key] = record_size
+                session["records"][key] = record
                 batch = batch_projects.setdefault(project["id"], {**project, "threads": []})
                 batch["threads"].append(record)
                 session["offset"] += 1
@@ -448,6 +639,40 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
         complete = session["offset"] == len(session["work"])
         payload["progress"] = {"cursor": None if complete else f'{session["token"]}:{session["offset"]}',
                                "complete": complete, "loaded": session["offset"], "total": len(session["work"]), "delta": True}
+        sync = {"reset": session["reset"], "base_version": session["base_version"], "version": None}
+        if cursor is None:
+            sync.update({"changed": [{"project_id": project["id"], "thread_id": tid} for project, tid in session["work"]],
+                         "removed": session["removed"], "project_ids": [project["id"] for project in session["projects"]]})
+        if complete:
+            # A code change during the scan must not bless stale task acceptance.
+            for project in session["projects"]:
+                if project_config_fingerprint(Path(project["root"])) != session["configs"][project["id"]]:
+                    session["failed"] = True
+                    raise SnapshotRequestError("project configuration changed while reading; refresh again", 409)
+                code = session["codes"][project["id"]]
+                if code is not None and project_code_fingerprint(Path(project["root"])) != code:
+                    session["failed"] = True
+                    raise SnapshotRequestError("project code changed while reading; refresh again", 409)
+            project_index = {project["id"]: project for project in session["projects"]}
+            for key, record in session["records"].items():
+                project = project_index[key[0]]
+                if thread_fingerprint(Path(project["root"]), key[1], project, session["codes"][key[0]], record) != session["fingerprints"][key]:
+                    session["failed"] = True
+                    raise SnapshotRequestError("records changed during refresh; start a new refresh", 409)
+            sync["summary"] = _version_summary(session)
+            size = sum(session["record_bytes"].values())
+            if size > SNAPSHOT_MAX_VERSION_BYTES:
+                raise SnapshotRequestError("snapshot exceeds the incremental cache limit", 413)
+            if size <= SNAPSHOT_MAX_VERSION_BYTES:
+                with SNAPSHOT_SESSIONS_LOCK:
+                    while SNAPSHOT_VERSIONS and (len(SNAPSHOT_VERSIONS) >= SNAPSHOT_MAX_VERSIONS or sum(v["bytes"] for v in SNAPSHOT_VERSIONS.values()) + size > SNAPSHOT_MAX_CACHE_BYTES):
+                        del SNAPSHOT_VERSIONS[min(SNAPSHOT_VERSIONS, key=lambda key: SNAPSHOT_VERSIONS[key]["touched"])]
+                    version = secrets.token_hex(16)
+                    SNAPSHOT_VERSIONS[version] = {"records": session["records"], "fingerprints": session["fingerprints"],
+                                                  "origin": session["origin"], "touched": time.monotonic(), "bytes": size, "record_bytes": session["record_bytes"]}
+                    sync["version"] = version
+            sync["cacheable"] = sync["version"] is not None
+        payload["sync"] = sync
         session["last_cursor"] = cursor
         session["last_payload"] = copy.deepcopy(payload)
         session["touched"] = time.monotonic()
@@ -567,8 +792,8 @@ class CollaborationHandler(BaseHTTPRequestHandler):
                 query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
                 if not query:
                     payload = snapshot()
-                elif query == {"progressive": ["1"]}:
-                    payload = progressive_snapshot()
+                elif query.get("progressive") == ["1"] and set(query) <= {"progressive", "since"} and ("since" not in query or len(query["since"]) == 1):
+                    payload = progressive_snapshot(since=query.get("since", [None])[0])
                 elif set(query) == {"cursor"} and len(query["cursor"]) == 1:
                     payload = progressive_snapshot(query["cursor"][0])
                 else:
