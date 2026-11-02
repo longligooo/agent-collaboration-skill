@@ -402,3 +402,29 @@ and unattended multi-round runs of the watcher, including its limits and Git syn
 MIT License. See [LICENSE](LICENSE).
 
 <p align="right"><a href="#top">Back to top ↑</a></p>
+
+### Optional manual-session ingress
+
+Manually opened Claude Code, Codex CLI/desktop Codex, and Cursor sessions need not
+switch to `watch`. An opt-in, local-only ingress CLI can bind an explicitly named
+session and accept current hook metadata, with separate expiring labels for hook
+observations and agent self-reports. It never treats either as independently
+observed process execution, automatically installs hooks, or reads chat history.
+Human originals require separate consent; the agent can use the `human-text`
+stdin entry point without asking the user to prepare JSON. Hook prompts are not
+automatically classified as human messages. This release has offline fixture
+coverage, not live validation of the user's installed tools; version and local vs
+cloud execution support must be checked before setup. See the [manual-session
+setup, compatibility, privacy, and removal guide](references/manual-session-ingress.md).
+
+### Project-scoped automatic tasks (opt-in MVP)
+
+The separate automatic backend provides coordinator-first planning, editable draft
+teams, exact revisioned human approval, durable per-recipient next-turn messages,
+and safe-boundary provider changes. Existing manual/watch workflows are unchanged.
+Start it explicitly with `python scripts/auto_service.py serve`, then use the local
+access token and project-level automatic-task entry. Version 1 targets capability-confirmed Codex CLI and Claude Code; agy execution is
+explicitly deferred. Workers use isolated snapshots of current Git-project contents, including uncommitted
+work. Sensitive/ignored exclusions are disclosed, originals stay untouched, and results
+remain pending explicit application against the captured baseline. Tests use fake providers, not real models.
+See [setup, safety and current limitations](references/automatic-collaboration.md).

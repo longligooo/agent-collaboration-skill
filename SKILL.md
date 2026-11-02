@@ -272,3 +272,40 @@ Record human input only from explicitly supplied original text with manual or
 authorized-import provenance using `human-record`; never relabel an agent
 paraphrase, infer recipients, or scrape external chats. Such records do not grant
 transport, task mutation, command, commit, or push authority.
+
+## Hand-Opened Sessions (Opt-In)
+
+For a manually opened Claude Code, Codex CLI/desktop Codex, or Cursor session,
+see [manual session ingress](references/manual-session-ingress.md). Do not require
+the human to switch to `watch`. The optional standalone `scripts/manual_ingress.py`
+can bind one explicitly identified project/thread/participant/vendor session and
+accept documented hook events. It does not install hooks, discover or read chat
+history, or start models. Obtain authorization before changing tool configuration;
+verify the actual version and execution location instead of claiming fixture
+coverage is a live integration test.
+
+Show fresh hook observations and explicit agent self-reports with their own source
+labels and finite expiry, never as independently observed process execution.
+Missing/expired evidence means unknown, not working or completed. Do not run an
+unconditional heartbeat timer to keep a manual session looking busy.
+
+Human-original recording requires separate explicit consent. Hook prompt events
+can be automated or forwarded; never automatically classify them as humans. When
+the human has authorized recording their explicitly supplied current original
+text for a bound recipient, the skill user may use `manual_ingress.py human-text`
+with that exact text on stdin and the explicit author/original/authorization
+options. Do not make the human assemble JSON each turn. This is labeled manual
+entry, not verified external capture; do not synthesize external source IDs, read
+transcripts, or expand the authorized recipient scope. Without a confirmed binding
+or original-text authorization, leave capture disabled and explain the missing
+setup rather than claiming it is recording.
+
+## Project-Scoped Automatic Tasks (Opt-In)
+
+See [automatic collaboration](references/automatic-collaboration.md) for the
+separate local service. Start it only when the human explicitly asks to run the
+automatic backend. It plans first, requires exact revisioned human roster approval,
+and never treats a successful process exit as coding-task acceptance. Do not use
+`watch --force` to bypass its checkout lock. Provider capability limits and local
+human-original privacy remain mandatory; no install/login/model test is implied
+by an instruction to develop the feature.

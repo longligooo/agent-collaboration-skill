@@ -342,3 +342,14 @@ python -m unittest discover -s tests -v
 MIT 许可证。参见 [LICENSE](LICENSE)。
 
 <p align="right"><a href="#top">返回顶部 ↑</a></p>
+
+### 项目内自动协作（显式开启的 MVP）
+
+独立自动后台支持先协调者规划、编辑待确认团队、按精确计划版本人工批准、
+持久化逐人消息队列和安全边界切换 provider，不替代现有手动 CLI/watch。
+明确需要运行时使用 `python scripts/auto_service.py serve`，在本地页面输入终端
+打印的访问令牌，再从项目内新建自动任务。第一版支持能力核实通过的 Codex CLI 和 Claude Code，agy 执行按用户选择延后。
+Worker 在当前 Git 项目内容的隔离快照中运行，允许未提交改动；敏感/ignored 文件排除会明确告知。
+产出相对捕获基线待显式应用，不自动修改原文件或暂存区。
+测试采用假 provider，不代表真实账号/模型已实测；进程成功也不代表验收通过。
+详见[启动、安全边界与当前限制](references/automatic-collaboration.md)。

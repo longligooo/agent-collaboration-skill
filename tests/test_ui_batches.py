@@ -268,7 +268,9 @@ class ProgressiveSnapshotTests(unittest.TestCase):
                     worker.start()
                     try:
                         self.assertTrue(entered.wait(2))
-                        self.assertEqual(get('/api/activity'), {'runs': []})
+                        activity = get('/api/activity')
+                        self.assertEqual(activity['runs'], [])
+                        self.assertEqual(activity['manual_observations']['observations'], [])
                         self.assertTrue(worker.is_alive())
                     finally:
                         release.set(); worker.join(5)

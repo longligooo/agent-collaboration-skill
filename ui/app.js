@@ -136,9 +136,11 @@ function decorateAvatar(node) {
   const run = runningFor(node.dataset.avatarId, human);
   node.classList.toggle("is-working", !!run);
   node.dataset.activityStatus = run ? "running" : "unknown";
+  const evidence = human || activityError ? [] : M.manualObservations(activity, nowOnServer()).filter(row => row.identity === node.dataset.avatarId);
+  const sourceInfo = evidence.map(row => `${row.evidence_kind === "hook-event-observed" ? "Hook 事件" : "Agent 自报"}：${row.status === "unknown" ? "未知或已过期" : row.status}；不是独立进程观测。`).join(" ");
   const info = run ? `当前工作中：${activityDescription(run)}（${run.thread_id}）。这是当前跨线程状态，不表示历史消息仍在编写。` : human ? "人类身份，不显示自动执行状态。" : "没有新鲜的已确认执行状态；不显示工作动效。";
-  node.title = `${node.dataset.avatarName} · ${info}`;
-  node.setAttribute("aria-label", `${node.dataset.avatarName} 的固定像素头像。${info}`);
+  node.title = `${node.dataset.avatarName} · ${info} ${sourceInfo}`;
+  node.setAttribute("aria-label", `${node.dataset.avatarName} 的固定像素头像。${info} ${sourceInfo}`);
   const existing = node.querySelector(".avatar-activity");
   if (run && !existing) node.append(h("span", { class: "avatar-activity", "aria-hidden": "true" }, [0, 1, 2, 3].map(() => h("i"))));
   else if (!run && existing) existing.remove();
@@ -223,7 +225,7 @@ function messageNode(entry, thread, index) {
 }
 function runningMessages(thread) {
   const runs = activityError ? [] : M.activeRuns(activity, nowOnServer(), humanIdentities()).filter(run => run.project_id === thread.project_id && run.thread_id === thread.thread_id);
-  return runs.map(run => {
+  const processMessages = runs.map(run => {
     const person = M.actorFor(thread, run.agent, run.identity);
     return h("article", { class: `message task-message${person.is_coordinator ? " own" : ""}`, "data-current-run": run.run_id }, avatar(person.identity, person.agent), h("div", { class: "message-main" },
       h("div", { class: "message-header" }, person.agent, h("span", { class: "message-role" }, "当前执行状态")),
@@ -231,6 +233,8 @@ function runningMessages(thread) {
       h("div", { class: "message-footer" }, "工作中", h("span", {}, `心跳 ${clockTime(run.heartbeat_at)}`)),
     ));
   });
+  const evidence = activityError ? [] : M.manualObservations(activity, nowOnServer()).filter(row => row.project_id === thread.project_id && row.thread_id === thread.thread_id);
+  return [...processMessages, ...evidence.map(row => h("article", { class: "message evidence-message", "data-evidence-key": `${row.project_id}/${row.binding_id}/${row.evidence_kind}` }, avatar(row.identity, row.participant || row.identity), h("div", { class: "message-main" }, h("div", { class: "message-header" }, row.participant || row.identity, h("span", { class: "message-role" }, row.evidence_kind === "hook-event-observed" ? "Hook 事件观测" : "Agent 自报")), h("div", { class: "bubble evidence-bubble" }, h("strong", {}, row.evidence_active ? (row.evidence_kind === "hook-event-observed" ? "近期收到工具事件" : "协作者自报工作中") : ({ unknown: "未知 / 证据已过期", ended: "已收到结束事件", revoked: "绑定已撤销", waiting: "自报等待", idle: "自报空闲" }[row.status] || "未确认状态")), h("p", {}, "不是独立进程观测，不显示进程执行动效。")), h("div", { class: "message-footer" }, `来源：${row.evidence_kind}`, `观测 ${clockTime(row.observed_at)}`))))];
 }
 function threadList(current) {
   const items = allThreads().filter(thread => `${thread.topic} ${thread.thread_id} ${thread.project_name}`.toLowerCase().includes(threadQuery.toLowerCase()));
@@ -293,7 +297,7 @@ function renderOverview() {
       h("section", { class: "panel" }, h("h2", {}, "最近动态"), M.array(overview.recent).length ? h("div", { class: "stack" }, overview.recent.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.title || item.topic), h("div", { class: "quiet" }, `${item.project_name} · ${item.author} · ${item.kind}`), item.summary ? h("p", {}, item.summary) : null))) : pendingEmpty("还没有协作记录。"))));
 }
 function renderProjects() { return M.array(snapshot.projects).length ? h("div", { class: "stack" }, snapshot.projects.map(project => h("a", { class: "card", href: `#/projects/${encodeURIComponent(project.id)}` }, h("div", { class: "card-top" }, h("strong", {}, project.name), h("span", { class: "meta" }, project.available ? `${M.array(project.threads).length} 个线程` : "目录不可用")), h("p", { class: "path" }, project.root)))) : emptyState(); }
-function renderProject(id) { const project = findProject(id); return !project ? pendingEmpty("没有这个项目。") : project.available ? h("div", {}, h("p", { class: "path" }, project.root), threadCards(M.array(project.threads))) : missing("这个目录已经不在本机上。"); }
+function renderProject(id) { const project = findProject(id); return !project ? pendingEmpty("没有这个项目。") : project.available ? h("div", {}, h("p", { class: "path" }, project.root), h("div", { class: "auto-project-entry" }, h("div", {}, h("strong", {}, "自动协作任务"), h("p", { class: "quiet" }, "协调者先规划，确认团队后再执行。手动线程保持不变。")), h("a", { class: "auto-btn primary", href: `#/auto/${encodeURIComponent(id)}` }, "打开自动协作 →")), threadCards(M.array(project.threads))) : missing("这个目录已经不在本机上。"); }
 function renderPeople() {
   return people().length ? h("div", { class: "people-grid" }, people().map(person => {
     const identity = personIdentity(person), human = person.actor_type === "human" || humanIdentities().includes(identity);
@@ -324,6 +328,7 @@ function pendingEmpty(message) { return missing(snapshotProgress ? (error ? "部
 function emptyState() { if (snapshotProgress) return pendingEmpty(""); return h("div", { class: "empty" }, "还没有注册到本机界面的项目。在项目里执行 ", h("code", {}, "python scripts/collab.py ui --root ."), " 后，这里会显示线程和协作者。"); }
 function missing(message) { return h("div", { class: "empty" }, message); }
 function pageTitle(current) {
+  if (current.name === "auto") return window.AutoUI.title(current);
   if (current.name === "projects") return ["项目", "按仓库查看本机协作"];
   if (current.name === "project") { const project = findProject(current.id); return [project?.name || "项目", project?.root || ""]; }
   if (["threads", "thread"].includes(current.name)) return ["协作线程", "在同一个上下文里查看讨论、接力与验收"];
@@ -391,10 +396,11 @@ function render() {
   const savedView = viewState();
   reusableMessages = new Map([...document.querySelectorAll(".message[data-message-key]")].map(node => [node.dataset.messageKey, node]));
   const current = route(), [title, subtitle] = pageTitle(current);
-  const active = ({ project: "projects", thread: "threads", person: "people" })[current.name] || current.name;
+  const active = ({ auto: "projects", project: "projects", thread: "threads", person: "people" })[current.name] || current.name;
   let body;
   const identity = current.id || selectedIdentity || (people()[0] && personIdentity(people()[0])) || "";
   if (!snapshot) body = missing(error || "正在读取本机记录…");
+  else if (current.name === "auto") body = window.AutoUI.render(current);
   else if (current.name === "overview") body = renderOverview();
   else if (current.name === "projects") body = renderProjects();
   else if (current.name === "project") body = renderProject(current.id);
@@ -406,10 +412,10 @@ function render() {
   else body = missing("地址格式无效，请从导航重新进入。");
   app.replaceChildren(h("div", { class: "shell" }, h("aside", { class: "sidebar" }, h("a", { class: "brand", href: "#/" }, h("span", { class: "logo", "aria-hidden": "true" }, Array.from({ length: 9 }, () => h("i"))), h("span", { class: "brand-text" }, "协作空间", h("small", {}, "AGENT COLLAB"))),
     h("div", { class: "rail-label" }, "WORKSPACE"), h("nav", { "aria-label": "主导航" }, nav("总览", "#/", active === "overview", "overview"), nav("项目", "#/projects", active === "projects", "project"), nav("协作线程", "#/threads", active === "threads", "thread"), nav("我的任务", taskHref(selectedIdentity || ""), active === "tasks", "tasks"), nav("协作者", "#/people", active === "people", "people")),
-    h("div", { class: "sidebar-foot" }, h("p", {}, "本机只读界面"), h("code", {}, `127.0.0.1:${snapshot?.port || 23451}`), h("p", {}, "像素条表示当前工作中；等待或状态过期时不显示。"))),
+    h("div", { class: "sidebar-foot" }, h("p", {}, current.name === "auto" ? "本机自动协作 · 显式授权" : "本机只读界面"), h("code", {}, `127.0.0.1:${snapshot?.port || 23451}`), h("p", {}, "像素条表示当前工作中；等待或状态过期时不显示。"))),
     h("main", { class: `main${current.name === "thread" ? " thread-page" : ""}` }, error ? h("div", { class: "banner" }, error) : null,
       snapshotProgress ? h("div", { class: "banner snapshot-progress", role: "status" }, `${error ? "读取中断" : "分批读取中"}：${snapshotProgress.loaded} / ${snapshotProgress.total} 个线程。统计为已读取部分，刷新完成前保留旧记录。`) : null,
-      h("header", { class: "top" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, subtitle)), h("div", { class: "top-actions" }, snapshot ? h("span", { class: "meta snapshot-time" }, `更新于 ${formatTime(snapshot.generated_at)}`) : null, h("button", { type: "button", class: "refresh", disabled: loading, onclick: () => load() }, loading ? "读取中…" : "刷新"), current.name === "thread" ? h("button", { class: "mobile-threads", type: "button", "aria-expanded": mobileThreads, onclick: () => { mobileThreads = !mobileThreads; render(); } }, "切换线程") : null)), body)));
+      h("header", { class: "top" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, subtitle)), h("div", { class: "top-actions" }, snapshot ? h("span", { class: "meta snapshot-time" }, `更新于 ${formatTime(snapshot.generated_at)}`) : null, h("button", { type: "button", class: "refresh", disabled: loading, onclick: () => current.name === "auto" ? window.AutoUI.refresh(current) : load() }, loading ? "读取中…" : "刷新"), current.name === "thread" ? h("button", { class: "mobile-threads", type: "button", "aria-expanded": mobileThreads, onclick: () => { mobileThreads = !mobileThreads; render(); } }, "切换线程") : null)), body)));
   reusableMessages = new Map();
   restoreMessages();
   restoreView(savedView);
@@ -650,6 +656,7 @@ function pauseContent() {
   contentLoading = false; clearTimeout(contentPaintTimer); contentPaintTimer = null; contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
 }
 function paintActivity() {
+  window.AutoUI?.paintActivity();
   document.querySelectorAll(".avatar[data-avatar-id]").forEach(decorateAvatar);
   document.querySelectorAll(".activity-health").forEach(node => { node.textContent = activityError ? "执行观测暂不可用" : "仅新鲜执行观测显示动效"; });
   const slot = document.querySelector(".live-messages");
@@ -660,7 +667,7 @@ function paintActivity() {
     if (atBottom && messages) messages.scrollTop = messages.scrollHeight;
   }
   clearTimeout(expiryTimer);
-  const expiries = M.activeRuns(activityError ? null : activity, nowOnServer(), humanIdentities()).map(run => Date.parse(run.expires_at));
+  const expiries = [...M.activeRuns(activityError ? null : activity, nowOnServer(), humanIdentities()).map(run => Date.parse(run.expires_at)), ...M.manualObservations(activityError ? null : activity, nowOnServer()).filter(row => row.evidence_active).map(row => Math.min(Date.parse(row.expires_at), Date.parse(row.observed_at) + 15000))];
   if (expiries.length) expiryTimer = setTimeout(paintActivity, Math.max(20, Math.min(...expiries) - nowOnServer() + 20));
 }
 async function pollActivity() {
@@ -683,7 +690,8 @@ async function pollActivity() {
     if (sequence === activitySequence) { paintActivity(); if (!document.hidden) activityTimer = setTimeout(pollActivity, 2000); }
   }
 }
-window.addEventListener("hashchange", () => { messageFilter = "all"; mobileThreads = false; render(); load({ background: true, reason: "navigation" }); });
+window.AutoUI?.configure({h,avatar,render,route,findProject,messageNode,uniqueHistory,runningMessages,threadHref,identityFor:(projectId,agent)=>{const person=people().find(p=>M.array(p.aliases).some(a=>a.project_id===projectId&&a.agent===agent));return person?personIdentity(person):agent;}});
+window.addEventListener("hashchange", () => { window.AutoUI?.navigate(route()); messageFilter = "all"; mobileThreads = false; render(); load({ background: true, reason: "navigation" }); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(activityTimer); activitySequence += 1; activityController?.abort(); pauseContent(); } else { render(); pollActivity(); } });
 window.addEventListener("pagehide", () => { contentSuspended = true; pauseContent(); clearTimeout(activityTimer); clearTimeout(expiryTimer); activitySequence += 1; activityController?.abort(); });
 window.addEventListener("pageshow", event => { if (event.persisted) { contentSuspended = false; render(); pollActivity(); } });

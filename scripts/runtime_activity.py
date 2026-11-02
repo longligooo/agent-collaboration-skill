@@ -20,7 +20,7 @@ import task_discovery
 
 SCHEMA_VERSION = 1
 TERMINAL_STATUSES = {"completed", "failed", "timed-out", "cancelled"}
-OBSERVERS = {"watcher", "wake-adapter"}
+OBSERVERS = {"watcher", "wake-adapter", "automatic-runtime"}
 HEARTBEAT_INTERVAL = 1.0
 HEARTBEAT_TTL = 5.0
 
@@ -71,6 +71,31 @@ def _linux_process(pid: int) -> Optional[tuple]:
 
 
 def process_token(pid: int) -> Optional[str]:
+    if type(pid) is not int or pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel.OpenProcess.restype = wintypes.HANDLE
+            kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            kernel.GetProcessTimes.restype = wintypes.BOOL
+            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel.CloseHandle.restype = wintypes.BOOL
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                created, exited, system, user = (wintypes.FILETIME() for _ in range(4))
+                if not kernel.GetProcessTimes(handle, *(ctypes.byref(v) for v in (created, exited, system, user))):
+                    return None
+                return "windows-start:" + str((created.dwHighDateTime << 32) | created.dwLowDateTime)
+            finally:
+                kernel.CloseHandle(handle)
+        except (OSError, AttributeError):
+            return None
     details = _linux_process(pid)
     return "linux-start:" + details[1] if details else None
 
@@ -348,3 +373,48 @@ def activity_snapshot(roots: Iterable[Path]) -> Dict[str, Any]:
                 item["expires_at"] = run["expires_at"]
     return {"schema_version": 1, "generated_at": now.isoformat(timespec="milliseconds"),
             "runs": runs, "identities": sorted(identities.values(), key=lambda item: item["identity"]), "errors": errors}
+
+
+def observe_process(root: Path, thread_id: str, agent: str, process: subprocess.Popen,
+                    *, observer: str = "automatic-runtime") -> Optional[Dict[str, Any]]:
+    """Observe an already-started authorized process; does not own its lifecycle.
+
+    The automatic supervisor alone calls this after Popen and durable attachment.
+    No command, prompt or provider output enters observations. Telemetry failures
+    remain best-effort, exactly as on existing wake paths.
+    """
+    if observer != "automatic-runtime":
+        raise collab.CollaborationError("unsupported externally-owned observer")
+    try:
+        root = collab.repository_root(str(root))
+        collab.validate_id(thread_id, "thread_id")
+        collab.validate_id(agent, "agent")
+        _runs_directory(root)
+        bindings = task_discovery.load_identities(root)
+        record = {"schema_version": 1, "run_id": str(uuid.uuid4()), "thread_id": thread_id,
+                  "agent": agent, "identity": task_discovery.identity_for(agent, bindings),
+                  "message_id": None, "observer": observer, "machine_token": machine_token(),
+                  "runner_pid": os.getpid(), "runner_start_token": process_token(os.getpid()),
+                  "process_pid": process.pid, "process_start_token": process_token(process.pid),
+                  "started_at": utc_now(), "heartbeat_at": None, "expires_at": None,
+                  "finished_at": None, "status": "running", "exit_code": None,
+                  "error": None, "log": None}
+        observe_process_heartbeat(root, record, process)
+        return record
+    except (OSError, ValueError, collab.CollaborationError):
+        return None
+
+
+def observe_process_heartbeat(root: Path, record: dict, process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        record["status"] = "running"
+        _heartbeat(record, HEARTBEAT_TTL)
+        _observe_write(root, record)
+
+
+def observe_process_finish(root: Path, record: dict, process: subprocess.Popen, status: str) -> None:
+    if status not in TERMINAL_STATUSES:
+        raise collab.CollaborationError("unsupported runtime terminal status")
+    if process.poll() is None:
+        raise collab.CollaborationError("cannot mark a live process finished")
+    _finish(root, record, status, process.returncode)

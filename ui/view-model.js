@@ -96,6 +96,15 @@
   function activeRunFor(payload, identity, now = Date.now(), humanIdentities = []) {
     return activeRuns(payload, now, humanIdentities).find(run => run.identity === identity) || null;
   }
+  function manualObservations(payload, now = Date.now()) {
+    return array(payload?.manual_observations?.observations).filter(row => row &&
+      ["hook-event-observed", "agent-self-reported"].includes(row.evidence_kind) && typeof row.identity === "string" && row.active === false).map(row => {
+      const observed = activityTime(row.observed_at), expires = activityTime(row.expires_at);
+      const fresh = Number.isFinite(observed) && Number.isFinite(expires) && observed <= now && expires > now && now - observed < 15000;
+      return { ...row, evidence_active: fresh && row.evidence_active === true,
+        status: fresh || ["revoked", "ended"].includes(row.status) ? row.status : "unknown" };
+    });
+  }
   function phaseLabel(phase) {
     const labels = { planning: "制定方案", implementing: "实施中", executing: "实施中", verifying: "验证中", reviewing: "审阅中", blocked: "已阻塞", accepted: "已验收", cancelled: "已取消" };
     return Object.hasOwn(labels, phase) ? labels[phase] : text(phase) || "未提供阶段";
@@ -108,11 +117,12 @@
     let parts;
     try { parts = text(hash).replace(/^#/, "").split("/").filter(Boolean).map(decodeURIComponent); }
     catch (_) { return { name: "invalid" }; }
+    if (parts[0] === "auto" && parts[1] && parts.length <= 3) return { name: "auto", projectId: parts[1], taskId: parts[2] || "" };
     if (parts[0] === "threads" && parts[1] && parts[2]) return { name: "thread", projectId: parts[1], threadId: parts[2] };
     if (["projects", "people"].includes(parts[0]) && parts[1]) return { name: parts[0] === "projects" ? "project" : "person", id: parts[1] };
     if (parts[0] === "tasks") return { name: "tasks", id: parts[1] || "" };
     if (["projects", "threads", "people"].includes(parts[0])) return { name: parts[0] };
     return { name: "overview" };
   }
-  return { array, text, hashIdentity, avatarSpec, participants, actorFor, isHumanEntry, recipients, history, activityTime, lastActivityAt, sortThreads, activeRuns, activeRunFor, phaseLabel, categoryLabel, parseRoute };
+  return { array, text, hashIdentity, avatarSpec, participants, actorFor, isHumanEntry, recipients, history, activityTime, lastActivityAt, sortThreads, activeRuns, activeRunFor, manualObservations, phaseLabel, categoryLabel, parseRoute };
 });

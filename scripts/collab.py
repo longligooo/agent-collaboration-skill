@@ -958,10 +958,18 @@ def load_wake_config(path: Path) -> Dict[str, Any]:
 
 
 def watch_lock_is_stale(path: Path) -> bool:
+    raw = ""
     try:
-        pid = int(json.loads(path.read_text(encoding="utf-8"))["pid"])
+        raw = path.read_text(encoding="utf-8")
+        record = json.loads(raw)
+        # A dead automatic supervisor may have left a live child or an unknown
+        # spawn window. Never let the legacy watcher steal that checkout lock.
+        # --force remains an explicit operator override, never used by runtime.
+        if isinstance(record, dict) and record.get("observer") == "automatic-runtime":
+            return False
+        pid = int(record["pid"])
     except (OSError, ValueError, KeyError, TypeError):
-        return True
+        return "automatic-runtime" not in raw
     if os.name == "nt":
         return False
     try:

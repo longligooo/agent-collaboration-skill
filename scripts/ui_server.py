@@ -774,6 +774,17 @@ class CollaborationHandler(BaseHTTPRequestHandler):
             super().log_message(format, *args)
 
     def do_GET(self) -> None:
+        gateway = getattr(self.server, "auto_gateway", None)
+        if gateway is not None:
+            if gateway.handle(self):
+                return
+            # Guard legacy local projections too when the write-capable service
+            # is enabled: otherwise DNS rebinding could read private thread data.
+            try:
+                gateway.check_origin(self)
+            except ValueError:
+                self.respond(403, {"result": "ERROR", "error": "local origin required"})
+                return
         path = self.path.split("?", 1)[0]
         if path == "/api/health":
             registry = load_registry(registry_path())
@@ -814,7 +825,10 @@ class CollaborationHandler(BaseHTTPRequestHandler):
                         raise collab.CollaborationError("activity does not accept query parameters")
                     import runtime_activity
                     import task_discovery
-                    payload = runtime_activity.activity_snapshot(task_discovery.registered_roots())
+                    roots = task_discovery.registered_roots()
+                    payload = runtime_activity.activity_snapshot(roots)
+                    import manual_ingress
+                    payload["manual_observations"] = manual_ingress.snapshot(roots)
                 else:
                     if set(query) != {"project_id", "thread_id"}:
                         raise collab.CollaborationError("thread requires project_id and thread_id only")
@@ -858,6 +872,14 @@ class CollaborationHandler(BaseHTTPRequestHandler):
         self.serve_file(path)
 
     def do_POST(self) -> None:
+        gateway = getattr(self.server, "auto_gateway", None)
+        if gateway is not None:
+            if gateway.handle(self):
+                return
+            # An auto-enabled server never accepts arbitrary HTTP root registration.
+            # Projects must already be registered through the existing local CLI.
+            self.respond(404, {"result": "ERROR", "error": "not found"})
+            return
         path = self.path.split("?", 1)[0]
         if path != "/api/register":
             self.respond(404, {"result": "ERROR", "error": "not found"})
@@ -912,11 +934,18 @@ class CollaborationHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def make_server(port: int) -> ThreadingHTTPServer:
+def make_server(port: int, *, auto_service=None, auto_credentials=None) -> ThreadingHTTPServer:
     if port < 1 or port > 65535:
         raise collab.CollaborationError(f"port must be between 1 and 65535; received {port}")
     try:
-        return ThreadingHTTPServer(("127.0.0.1", port), CollaborationHandler)
+        server = ThreadingHTTPServer(("127.0.0.1", port), CollaborationHandler)
+        if auto_service is not None:
+            import auto_api
+            if auto_credentials is None:
+                server.server_close()
+                raise collab.CollaborationError("auto service requires explicit local credentials")
+            server.auto_gateway = auto_api.Gateway(auto_credentials, lambda: load_registry(registry_path()), auto_service.dispatch)
+        return server
     except OSError as exc:
         raise collab.CollaborationError(f"cannot listen on 127.0.0.1:{port}: {exc}") from exc
 
