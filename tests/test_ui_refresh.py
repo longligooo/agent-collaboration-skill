@@ -144,7 +144,7 @@ assert.notEqual(document.querySelector('.message[data-message-key]').dataset.mes
     def test_manual_refresh_wins_over_inflight_background_snapshot(self):
         self.run_dom(r'''
 (async()=>{
-const waiting=[];fetch=url=>url==='/api/snapshot'?new Promise(resolve=>waiting.push(resolve)):Promise.resolve(response({thread:thread('p',[entry('fresh')])}));
+const waiting=[];fetch=url=>url.startsWith('/api/snapshot')?new Promise(resolve=>waiting.push(resolve)):Promise.resolve(response({thread:thread('p',[entry('fresh')])}));
 const first=load({background:true}),second=load();
 const newSnapshot=snap();newSnapshot.projects[0].name='FRESH PROJECT';waiting[1](response(newSnapshot));await second;
 const oldSnapshot=snap();oldSnapshot.projects[0].name='STALE PROJECT';waiting[0](response(oldSnapshot));await first;
@@ -187,7 +187,7 @@ pauseContent();activitySequence+=1;activityController.abort();
 let resolve;fetch=()=>new Promise(done=>{resolve=done;});const pending=load();
 assert.equal(document.querySelector('.refresh').disabled,true);
 pauseContent();resolve(response(snap()));await pending;
-fetch=async url=>response(url==='/api/snapshot'?snap():{thread:thread()});
+fetch=async url=>response(url.startsWith('/api/snapshot')?snap():{thread:thread()});
 await load({background:true});assert.equal(document.querySelector('.refresh').disabled,false);
 assert.equal(document.querySelector('.refresh').textContent,'刷新');
 })();
@@ -199,7 +199,7 @@ assert.equal(document.querySelector('.refresh').textContent,'刷新');
 fetch=async()=>response({thread:thread('wrong-project')});await ensureRouteData({force:true,background:true});
 assert.equal(details.get(routeKey('p','same')).project_id,'p');assert(detailErrors.has(routeKey('p','same')));
 window.dispatch('pagehide');assert.equal(contentSuspended,true);
-let calls=0;fetch=async url=>{calls++;return response(url==='/api/activity'?{runs:[]}:url==='/api/snapshot'?snap():{thread:thread()});};
+let calls=0;fetch=async url=>{calls++;return response(url==='/api/activity'?{runs:[]}:url.startsWith('/api/snapshot')?snap():{thread:thread()});};
 await load({background:true});assert.equal(calls,0);
 window.dispatch('pageshow',{persisted:true});await new Promise(resolve=>Promise.resolve().then(resolve));
 assert.equal(contentSuspended,false);assert(calls>=2);

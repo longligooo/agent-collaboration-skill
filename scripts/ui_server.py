@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -182,7 +184,7 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
     return record
 
 
-def scan_project(entry: Dict[str, Any]) -> Dict[str, Any]:
+def project_shell(entry: Dict[str, Any]) -> Dict[str, Any]:
     root = Path(entry["root"])
     project = {
         "id": project_id(str(root)),
@@ -202,6 +204,14 @@ def scan_project(entry: Dict[str, Any]) -> Dict[str, Any]:
     except collab.CollaborationError as exc:
         project["identity_error"] = str(exc)
         project["identity_bindings"] = None
+    return project
+
+
+def scan_project(entry: Dict[str, Any]) -> Dict[str, Any]:
+    project = project_shell(entry)
+    if not project["available"]:
+        return project
+    root = Path(project["root"])
     threads = []
     try:
         thread_ids = collab.list_thread_ids(root)
@@ -290,7 +300,10 @@ def thread_detail(project_identifier: str, thread_id: str, path: Optional[Path] 
 
 def snapshot(path: Optional[Path] = None) -> Dict[str, Any]:
     registry = load_registry(path or registry_path())
-    projects = [scan_project(entry) for entry in registry["projects"]]
+    return snapshot_from_projects([scan_project(entry) for entry in registry["projects"]])
+
+
+def snapshot_from_projects(projects: List[Dict[str, Any]]) -> Dict[str, Any]:
     projects.sort(key=lambda item: item["name"])
     threads = [thread for project in projects for thread in project["threads"]]
     people = collaborator_records(projects)
@@ -336,6 +349,113 @@ def snapshot(path: Optional[Path] = None) -> Dict[str, Any]:
             "recent": recent[:12],
         },
     }
+
+
+# Sessions retain project metadata, the frozen work list and one delta replay
+# response only. Scanned thread records are not accumulated on the server. Locks never cover activity/detail requests. Files are read live,
+# but the registry and thread work list are frozen for each refresh generation.
+SNAPSHOT_BATCH_SIZE = 8
+SNAPSHOT_BATCH_SECONDS = 0.1
+SNAPSHOT_SESSION_TTL = 120
+SNAPSHOT_MAX_SESSIONS = 4
+SNAPSHOT_WORKERS = threading.BoundedSemaphore(2)
+SNAPSHOT_SESSIONS_LOCK = threading.Lock()
+SNAPSHOT_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+class SnapshotRequestError(ValueError):
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
+
+
+def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = None) -> Dict[str, Any]:
+    if cursor is not None and not re.fullmatch(r"[0-9a-f]{32}:[0-9]{1,12}", cursor):
+        raise SnapshotRequestError("invalid snapshot cursor", 400)
+    if not SNAPSHOT_WORKERS.acquire(blocking=False):
+        raise SnapshotRequestError("snapshot readers busy; retry shortly", 503)
+    session = None
+    locked = False
+    try:
+        now = time.monotonic()
+        batch_projects = {}
+        if cursor is None:
+            registry = load_registry(path or registry_path())
+            projects = [project_shell(entry) for entry in registry["projects"]]
+            queues = []
+            for project in projects:
+                ids = []
+                if project["available"]:
+                    try:
+                        ids = collab.list_thread_ids(Path(project["root"]))
+                    except collab.CollaborationError as exc:
+                        project["error"] = str(exc)
+                queues.append([(project, thread_id) for thread_id in ids])
+            # Interleave projects so a large first project cannot hide all others.
+            work = [queue[index] for index in range(max(map(len, queues), default=0))
+                    for queue in queues if index < len(queue)]
+            token = secrets.token_hex(16)
+            session = {"projects": projects, "work": work, "offset": 0,
+                       "touched": now, "lock": threading.Lock(), "last_cursor": None,
+                       "last_payload": None, "token": token}
+            session["lock"].acquire()
+            locked = True
+            with SNAPSHOT_SESSIONS_LOCK:
+                # Never evict an in-flight scan. Prefer expired/completed views;
+                # otherwise evict the oldest idle session (e.g. a closed tab).
+                candidates = sorted(SNAPSHOT_SESSIONS, key=lambda key: (
+                    SNAPSHOT_SESSIONS[key]["offset"] < len(SNAPSHOT_SESSIONS[key]["work"]),
+                    SNAPSHOT_SESSIONS[key]["touched"]))
+                for key in candidates:
+                    old = SNAPSHOT_SESSIONS[key]
+                    if old["lock"].locked():
+                        continue
+                    if now - old["touched"] > SNAPSHOT_SESSION_TTL or len(SNAPSHOT_SESSIONS) >= SNAPSHOT_MAX_SESSIONS:
+                        del SNAPSHOT_SESSIONS[key]
+                if len(SNAPSHOT_SESSIONS) >= SNAPSHOT_MAX_SESSIONS:
+                    raise SnapshotRequestError("snapshot sessions busy; retry shortly", 503)
+                SNAPSHOT_SESSIONS[token] = session
+        else:
+            token, _ = cursor.split(":")
+            with SNAPSHOT_SESSIONS_LOCK:
+                session = SNAPSHOT_SESSIONS.get(token)
+                if session is None or now - session["touched"] > SNAPSHOT_SESSION_TTL:
+                    if session is not None and not session["lock"].locked():
+                        del SNAPSHOT_SESSIONS[token]
+                    raise SnapshotRequestError("snapshot cursor expired; start a new refresh", 410)
+                locked = session["lock"].acquire(blocking=False)
+            if not locked:
+                raise SnapshotRequestError("snapshot page already being read; retry shortly", 503)
+            session["touched"] = now
+            if cursor == session["last_cursor"]:
+                return copy.deepcopy(session["last_payload"])
+            if cursor != f'{token}:{session["offset"]}' or session["offset"] >= len(session["work"]):
+                raise SnapshotRequestError("snapshot cursor is stale; start a new refresh", 410)
+            start = time.monotonic()
+            stop = min(len(session["work"]), session["offset"] + SNAPSHOT_BATCH_SIZE)
+            while session["offset"] < stop:
+                project, thread_id = session["work"][session["offset"]]
+                record = scan_thread(Path(project["root"]), thread_id, project)
+                batch = batch_projects.setdefault(project["id"], {**project, "threads": []})
+                batch["threads"].append(record)
+                session["offset"] += 1
+                if time.monotonic() - start >= SNAPSHOT_BATCH_SECONDS:
+                    break
+        projects = session["projects"] if cursor is None else list(batch_projects.values())
+        for project in projects:
+            project["threads"].sort(key=ui_read_model.thread_sort_key)
+        payload = snapshot_from_projects(projects)
+        complete = session["offset"] == len(session["work"])
+        payload["progress"] = {"cursor": None if complete else f'{session["token"]}:{session["offset"]}',
+                               "complete": complete, "loaded": session["offset"], "total": len(session["work"]), "delta": True}
+        session["last_cursor"] = cursor
+        session["last_payload"] = copy.deepcopy(payload)
+        session["touched"] = time.monotonic()
+        return copy.deepcopy(payload)
+    finally:
+        if locked:
+            session["lock"].release()
+        SNAPSHOT_WORKERS.release()
 
 
 def register_project(root: Path, path: Optional[Path] = None) -> Dict[str, Any]:
@@ -443,8 +563,20 @@ class CollaborationHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/api/snapshot":
-            payload = snapshot()
-            payload["port"] = self.server.server_address[1]
+            try:
+                query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+                if not query:
+                    payload = snapshot()
+                elif query == {"progressive": ["1"]}:
+                    payload = progressive_snapshot()
+                elif set(query) == {"cursor"} and len(query["cursor"]) == 1:
+                    payload = progressive_snapshot(query["cursor"][0])
+                else:
+                    raise SnapshotRequestError("snapshot requires progressive=1 or one cursor", 400)
+                payload["port"] = self.server.server_address[1]
+            except (SnapshotRequestError, collab.CollaborationError, OSError, ValueError, TypeError, KeyError) as exc:
+                self.respond(getattr(exc, "status", 400), {"result": "ERROR", "error": str(exc)})
+                return
             self.respond(200, payload)
             return
         if path in {"/api/thread", "/api/activity"}:

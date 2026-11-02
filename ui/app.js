@@ -26,12 +26,14 @@ const disclosureState = new Set();
 const scrollState = new Map();
 let contentGeneration = 0;
 let contentTimer = null;
+let contentPaintTimer = null;
 let contentController = null;
 let contentSequence = 0;
 let contentSuspended = false;
 const contentRequests = new Map();
 const CONTENT_POLL_MS = 3000;
-const REQUEST_TIMEOUT_MS = 6000;
+const REQUEST_TIMEOUT_MS = 60000;
+let snapshotProgress = null;
 let reusableMessages = new Map();
 try { selectedIdentity = localStorage.getItem("collab.viewIdentity") || ""; } catch (_) { /* Optional preference. */ }
 
@@ -262,7 +264,7 @@ function inspector(thread) {
 }
 function renderThread(projectId, threadId) {
   const base = findThread(projectId, threadId);
-  if (!base) return missing("没有这个线程。");
+  if (!base && !(snapshotProgress && details.has(routeKey(projectId, threadId)))) return pendingEmpty("没有这个线程。");
   const key = routeKey(projectId, threadId), thread = details.get(key) || base;
   const entries = uniqueHistory(thread), visible = entries.filter(entry => messageFilter === "all" || messageKind(entry) === messageFilter);
   const kinds = [...new Set(entries.map(messageKind).filter(Boolean))];
@@ -278,24 +280,24 @@ function renderThread(projectId, threadId) {
 function signalCard(signal) { return h("div", { class: "card" }, h("div", { class: "card-top" }, `${signal.from || "?"} → ${signal.to || "?"}`, h("span", { class: "meta" }, formatTime(signal.created_at))), h("div", { class: "pills" }, h("span", { class: "pill" }, signal.decision), signal.requested_action ? h("span", { class: "pill" }, signal.requested_action) : null), signal.error ? h("p", { class: "warning" }, signal.error) : null); }
 function threadCards(threads) {
   threads = M.sortThreads(threads);
-  return threads.length ? h("div", { class: "stack" }, threads.map(thread => h("a", { class: "card thread-card", href: threadHref(thread.project_id, thread.thread_id) }, h("div", { class: "card-top" }, h("span", { class: "title" }, thread.topic), statusPill(thread.status)), h("div", { class: "quiet" }, `${thread.project_name} · ${thread.thread_id}`), h("p", { class: "quiet" }, threadTiming(thread)), h("div", { class: "card-bottom" }, avatarStack(thread), h("span", { class: "meta" }, `第 ${thread.round || 0} 轮`)), M.array(thread.signals).some(signal => signal.decision === "NEW") ? h("span", { class: "pill attention" }, "有待处理通知") : null))) : missing("这个范围内还没有线程。");
+  return threads.length ? h("div", { class: "stack" }, threads.map(thread => h("a", { class: "card thread-card", href: threadHref(thread.project_id, thread.thread_id) }, h("div", { class: "card-top" }, h("span", { class: "title" }, thread.topic), statusPill(thread.status)), h("div", { class: "quiet" }, `${thread.project_name} · ${thread.thread_id}`), h("p", { class: "quiet" }, threadTiming(thread)), h("div", { class: "card-bottom" }, avatarStack(thread), h("span", { class: "meta" }, `第 ${thread.round || 0} 轮`)), M.array(thread.signals).some(signal => signal.decision === "NEW") ? h("span", { class: "pill attention" }, "有待处理通知") : null))) : pendingEmpty("这个范围内还没有线程。");
 }
 function renderOverview() {
   if (!M.array(snapshot.projects).length) return emptyState();
   const overview = snapshot.overview || {};
   return h("div", {}, h("div", { class: "stats" }, [[overview.projects, "项目"], [overview.threads, "线程"], [overview.collaborators, "协作者"], [overview.pending, "待处理通知"]].map(([value, label]) => h("div", { class: "stat" }, h("b", {}, value || 0), h("span", {}, label)))),
-    h("div", { class: "split" }, h("section", { class: "panel" }, h("h2", {}, "需要处理"), M.array(overview.attention).length ? h("div", { class: "stack" }, overview.attention.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.topic || item.thread_id), h("div", { class: "quiet" }, `${item.project_name} · ${item.from || "?"} → ${item.to}`), h("span", { class: "pill attention" }, item.requested_action || item.decision)))) : missing("没有待处理的通知。")),
-      h("section", { class: "panel" }, h("h2", {}, "最近动态"), M.array(overview.recent).length ? h("div", { class: "stack" }, overview.recent.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.title || item.topic), h("div", { class: "quiet" }, `${item.project_name} · ${item.author} · ${item.kind}`), item.summary ? h("p", {}, item.summary) : null))) : missing("还没有协作记录。"))));
+    h("div", { class: "split" }, h("section", { class: "panel" }, h("h2", {}, "需要处理"), M.array(overview.attention).length ? h("div", { class: "stack" }, overview.attention.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.topic || item.thread_id), h("div", { class: "quiet" }, `${item.project_name} · ${item.from || "?"} → ${item.to}`), h("span", { class: "pill attention" }, item.requested_action || item.decision)))) : pendingEmpty("没有待处理的通知。")),
+      h("section", { class: "panel" }, h("h2", {}, "最近动态"), M.array(overview.recent).length ? h("div", { class: "stack" }, overview.recent.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.title || item.topic), h("div", { class: "quiet" }, `${item.project_name} · ${item.author} · ${item.kind}`), item.summary ? h("p", {}, item.summary) : null))) : pendingEmpty("还没有协作记录。"))));
 }
 function renderProjects() { return M.array(snapshot.projects).length ? h("div", { class: "stack" }, snapshot.projects.map(project => h("a", { class: "card", href: `#/projects/${encodeURIComponent(project.id)}` }, h("div", { class: "card-top" }, h("strong", {}, project.name), h("span", { class: "meta" }, project.available ? `${M.array(project.threads).length} 个线程` : "目录不可用")), h("p", { class: "path" }, project.root)))) : emptyState(); }
-function renderProject(id) { const project = findProject(id); return !project ? missing("没有这个项目。") : project.available ? h("div", {}, h("p", { class: "path" }, project.root), threadCards(M.array(project.threads))) : missing("这个目录已经不在本机上。"); }
+function renderProject(id) { const project = findProject(id); return !project ? pendingEmpty("没有这个项目。") : project.available ? h("div", {}, h("p", { class: "path" }, project.root), threadCards(M.array(project.threads))) : missing("这个目录已经不在本机上。"); }
 function renderPeople() {
   return people().length ? h("div", { class: "people-grid" }, people().map(person => {
     const identity = personIdentity(person), human = person.actor_type === "human" || humanIdentities().includes(identity);
     return h("section", { class: "person-card" }, h("div", { class: "person-head" }, avatar(identity, person.display_name || identity, "lg", human), h("div", {}, h("h3", {}, person.display_name || identity), h("p", { class: "quiet" }, human ? "人类来源身份" : "稳定协作身份"))), h("dl", {}, h("dt", {}, "身份键"), h("dd", {}, identity), h("dt", {}, "参与"), h("dd", {}, `${M.array(person.projects).length} 项目 · ${M.array(person.threads).length} 线程`), h("dt", {}, "本地别名"), h("dd", {}, M.array(person.aliases).map(alias => alias.agent).join("、") || person.id), h("dt", {}, "通知"), h("dd", {}, `${person.pending || 0} 条待处理；通知不代表执行中`)), h("div", { class: "pills" }, M.array(person.tools).map(tool => h("span", { class: "pill" }, tool))), h("a", { class: "text-link", href: taskHref(identity) }, "查看该协作者的任务 →"), h("a", { class: "text-link", href: `#/people/${encodeURIComponent(identity)}` }, "查看参与线程 →"));
   })) : emptyState();
 }
-function renderPerson(id) { const person = people().find(item => personIdentity(item) === id); return person ? threadCards(M.array(person.threads)) : missing("没有这个协作者。"); }
+function renderPerson(id) { const person = people().find(item => personIdentity(item) === id); return person ? threadCards(M.array(person.threads)) : pendingEmpty("没有这个协作者。"); }
 function selectIdentity(identity) { selectedIdentity = identity; try { localStorage.setItem("collab.viewIdentity", identity); } catch (_) { /* Optional preference. */ } location.hash = taskHref(identity); if (route().id === identity) { render(); ensureRouteData(); } }
 function taskCard(item) {
   const task = item.coding_task, checkpoint = task?.checkpoint || {};
@@ -303,7 +305,7 @@ function taskCard(item) {
 }
 function renderTasks(identity) {
   const options = people();
-  if (!identity) return missing("还没有可选的协作者身份。");
+  if (!identity) return pendingEmpty("还没有可选的协作者身份。");
   const result = tasks.get(identity), failure = taskErrors.get(identity);
   const human = humanIdentities().includes(identity);
   return h("div", { class: "tasks-page" }, h("section", { class: "identity-bar" }, avatar(identity, actorName(identity), "lg", human), h("div", {}, h("h2", {}, `${actorName(identity)} 的工作队列`), h("p", { class: "quiet" }, "稳定身份：", h("code", {}, identity))),
@@ -315,7 +317,8 @@ function renderTasks(identity) {
     M.array(result?.errors).length ? disclosure(`tasks/${identity}/errors`, `${result.errors.length} 个项目或线程读取异常`, h("div", {}, result.errors.map(item => h("p", {}, `${item.project_root || item.thread_id || ""}：${item.error}`))), "task-errors") : null,
     h("p", { class: "tasks-note" }, "这里只读任务与检查点。查看任务不会执行命令、发送消息或确认通知；“可继续处理”不代表当前正在执行。"));
 }
-function emptyState() { return h("div", { class: "empty" }, "还没有注册到本机界面的项目。在项目里执行 ", h("code", {}, "python scripts/collab.py ui --root ."), " 后，这里会显示线程和协作者。"); }
+function pendingEmpty(message) { return missing(snapshotProgress ? (error ? "部分记录尚未读取，请刷新重试。" : "正在分批读取记录…") : message); }
+function emptyState() { if (snapshotProgress) return pendingEmpty(""); return h("div", { class: "empty" }, "还没有注册到本机界面的项目。在项目里执行 ", h("code", {}, "python scripts/collab.py ui --root ."), " 后，这里会显示线程和协作者。"); }
 function missing(message) { return h("div", { class: "empty" }, message); }
 function pageTitle(current) {
   if (current.name === "projects") return ["项目", "按仓库查看本机协作"];
@@ -402,6 +405,7 @@ function render() {
     h("div", { class: "rail-label" }, "WORKSPACE"), h("nav", { "aria-label": "主导航" }, nav("总览", "#/", active === "overview", "overview"), nav("项目", "#/projects", active === "projects", "project"), nav("协作线程", "#/threads", active === "threads", "thread"), nav("我的任务", taskHref(selectedIdentity || ""), active === "tasks", "tasks"), nav("协作者", "#/people", active === "people", "people")),
     h("div", { class: "sidebar-foot" }, h("p", {}, "本机只读界面"), h("code", {}, `127.0.0.1:${snapshot?.port || 23451}`), h("p", {}, "像素条表示当前工作中；等待或状态过期时不显示。"))),
     h("main", { class: `main${current.name === "thread" ? " thread-page" : ""}` }, error ? h("div", { class: "banner" }, error) : null,
+      snapshotProgress ? h("div", { class: "banner snapshot-progress", role: "status" }, `${error ? "读取中断" : "分批读取中"}：${snapshotProgress.loaded} / ${snapshotProgress.total} 个线程。统计为已读取部分，刷新完成前保留旧记录。`) : null,
       h("header", { class: "top" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, subtitle)), h("div", { class: "top-actions" }, snapshot ? h("span", { class: "meta snapshot-time" }, `更新于 ${formatTime(snapshot.generated_at)}`) : null, h("button", { type: "button", class: "refresh", disabled: loading, onclick: () => load() }, loading ? "读取中…" : "刷新"), current.name === "thread" ? h("button", { class: "mobile-threads", type: "button", "aria-expanded": mobileThreads, onclick: () => { mobileThreads = !mobileThreads; render(); } }, "切换线程") : null)), body)));
   reusableMessages = new Map();
   restoreMessages();
@@ -470,44 +474,133 @@ function scheduleContent() {
   clearTimeout(contentTimer);
   if (!document.hidden && !contentSuspended) contentTimer = setTimeout(() => load({ background: true }), CONTENT_POLL_MS);
 }
+// Partial reads must never turn a missing row into a deletion. Only a complete
+// generation replaces the old snapshot; each cumulative batch overlays by identity.
+function mergeSnapshot(previous, incoming) {
+  if (!previous) return incoming;
+  const projects = new Map(M.array(previous.projects).map(project => [project.id, project]));
+  for (const project of incoming.projects) {
+    const threads = new Map(M.array(projects.get(project.id)?.threads).map(thread => [thread.thread_id, thread]));
+    for (const thread of M.array(project.threads)) threads.set(thread.thread_id, thread);
+    projects.set(project.id, { ...project, threads: M.sortThreads([...threads.values()]) });
+  }
+  const collaborators = new Map(M.array(previous.collaborators).map(person => [personIdentity(person), person]));
+  for (const person of M.array(incoming.collaborators)) {
+    const old = collaborators.get(personIdentity(person));
+    const threads = new Map(M.array(old?.threads).map(thread => [routeKey(thread.project_id, thread.thread_id), thread]));
+    for (const thread of M.array(person.threads)) threads.set(routeKey(thread.project_id, thread.thread_id), thread);
+    const union = (left, right, key) => [...new Map([...M.array(left), ...M.array(right)].map(item => [key(item), item])).values()];
+    collaborators.set(personIdentity(person), { ...person,
+      actor_type: old?.actor_type === "human" ? "human" : person.actor_type,
+      aliases: union(old?.aliases, person.aliases, alias => routeKey(alias.project_id, alias.agent)),
+      projects: union(old?.projects, person.projects, project => project.id),
+      tools: union(old?.tools, person.tools, tool => tool),
+      threads: M.sortThreads([...threads.values()]) });
+  }
+  return { ...incoming, projects: [...projects.values()], collaborators: [...collaborators.values()] };
+}
+// Delta pages contain disjoint threads. Accumulate one fresh generation without
+// retransmitting/reprojecting every earlier thread on every server request.
+function appendSnapshotBatch(previous, batch) {
+  if (!previous) return batch;
+  const combined = mergeSnapshot(previous, batch);
+  const oldPeople = new Map(M.array(previous.collaborators).map(person => [personIdentity(person), person]));
+  const newPeople = new Map(M.array(batch.collaborators).map(person => [personIdentity(person), person]));
+  combined.collaborators = combined.collaborators.map(person => {
+    const old = oldPeople.get(personIdentity(person)), added = newPeople.get(personIdentity(person));
+    return old && added ? { ...person, pending: (old.pending || 0) + (added.pending || 0), turns: (old.turns || 0) + (added.turns || 0), last_at: [old.last_at || "", added.last_at || ""].sort().pop() } : person;
+  }).sort((a, b) => (b.pending || 0) - (a.pending || 0) || (personIdentity(a) < personIdentity(b) ? -1 : personIdentity(a) > personIdentity(b) ? 1 : 0));
+  const before = previous.overview || {}, added = batch.overview || {};
+  const byTime = (a, b) => (a.created_at || "") < (b.created_at || "") ? -1 : (a.created_at || "") > (b.created_at || "") ? 1 : 0;
+  combined.overview = {
+    projects: combined.projects.length,
+    threads: combined.projects.reduce((count, project) => count + M.array(project.threads).length, 0),
+    collaborators: combined.collaborators.length,
+    pending: (before.pending || 0) + (added.pending || 0),
+    attention: [...M.array(before.attention), ...M.array(added.attention)].sort(byTime),
+    recent: [...M.array(before.recent), ...M.array(added.recent)].sort((a, b) => byTime(b, a)).slice(0, 12),
+  };
+  return combined;
+}
 async function load({ background = false } = {}) {
   if (document.hidden || contentSuspended) return;
-  clearTimeout(contentTimer);
+  clearTimeout(contentTimer); clearTimeout(contentPaintTimer); contentPaintTimer = null;
   const sequence = ++contentSequence;
   contentController?.abort(); cancelContentRequests();
   const controller = new AbortController(); contentController = controller;
+  const previous = snapshot;
   loading = !background;
   if (!background) render();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let changed = false;
+  let changed = false, routeRead = null, accumulated = null;
+  let lastBatchRender = 0, lastPaintedLoaded = 0;
+  const requestedRoutes = new Set();
+  const valid = () => sequence === contentSequence && !controller.signal.aborted;
+  const paintBatch = () => {
+    if (!valid()) return;
+    contentPaintTimer = null;
+    render(); lastBatchRender = Date.now(); lastPaintedLoaded = snapshotProgress?.loaded || 0;
+  };
   try {
-    const payload = await getJSON("/api/snapshot", controller.signal);
-    if (sequence !== contentSequence || controller.signal.aborted) return;
-    if (!payload || !Array.isArray(payload.projects)) throw new Error("返回的项目数据格式无效");
-    changed = contentSignature(snapshot) !== contentSignature(payload) || !!error;
-    snapshot = payload; error = "";
+    let url = "/api/snapshot?progressive=1";
+    const cursors = new Set();
+    while (url) {
+      // Each batch has its own deadline: a large scan may legitimately need
+      // longer than one minute overall while continuing to make progress.
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let payload;
+      try { payload = await getJSON(url, controller.signal); }
+      finally { clearTimeout(timeout); }
+      if (!valid()) return;
+      if (!payload || !Array.isArray(payload.projects)) throw new Error("返回的项目数据格式无效");
+      const { progress, ...content } = payload;
+      if (progress && (typeof progress.complete !== "boolean" || !Number.isInteger(progress.loaded) || !Number.isInteger(progress.total) || progress.loaded < 0 || progress.total < progress.loaded || (!progress.complete && (typeof progress.cursor !== "string" || !progress.cursor || cursors.has(progress.cursor))))) throw new Error("返回的分批读取进度无效");
+      const partial = progress && !progress.complete;
+      accumulated = progress?.delta ? appendSnapshotBatch(accumulated, content) : content;
+      const next = partial ? mergeSnapshot(previous, accumulated) : accumulated;
+      const nextProgress = partial ? progress : null;
+      changed = contentSignature(snapshot) !== contentSignature(next) || !!error || JSON.stringify(snapshotProgress) !== JSON.stringify(nextProgress);
+      snapshot = next; snapshotProgress = nextProgress; error = "";
+      // Bound DOM rebuild frequency for fast local pages, but paint the first
+      // real records immediately and always paint the final result.
+      if (changed && (!partial || !lastBatchRender || (!lastPaintedLoaded && progress.loaded) || Date.now() - lastBatchRender >= 100)) {
+        clearTimeout(contentPaintTimer); paintBatch();
+      } else if (changed && !contentPaintTimer) {
+        // A following network read may stall: still show already received rows
+        // at the trailing edge rather than waiting for the next response.
+        contentPaintTimer = setTimeout(paintBatch, Math.max(0, 100 - (Date.now() - lastBatchRender)));
+      }
+      // The current conversation need not wait for unrelated projects to scan.
+      const current = route(), identity = current.id || selectedIdentity || (people()[0] && personIdentity(people()[0]));
+      const routeReadKey = current.name === "thread" ? JSON.stringify(["thread", current.projectId, current.threadId]) : current.name === "tasks" && identity ? JSON.stringify(["tasks", identity]) : null;
+      if (routeReadKey && !requestedRoutes.has(routeReadKey)) {
+        requestedRoutes.add(routeReadKey);
+        routeRead = ensureRouteData({ force: true, background });
+      }
+      if (!partial) break;
+      cursors.add(progress.cursor);
+      url = `/api/snapshot?${new URLSearchParams({ cursor: progress.cursor })}`;
+    }
   } catch (exc) {
     if (sequence !== contentSequence) return;
     const message = `${exc.name === "AbortError" ? "读取超时" : exc.message || "无法读取协作数据"}。已加载记录可能不是最新状态。`;
     changed = error !== message; error = message;
   } finally {
-    clearTimeout(timeout);
     if (sequence === contentSequence) {
+      clearTimeout(contentPaintTimer); contentPaintTimer = null;
       loading = false;
       if (changed || !background) render();
       else {
         const stamp = document.querySelector(".snapshot-time"); if (stamp && snapshot) stamp.textContent = `更新于 ${formatTime(snapshot.generated_at)}`;
-        // A hidden/BFCache pause may interrupt a foreground refresh. Its old
-        // button must not remain disabled when an unchanged background read resumes.
         const refresh = document.querySelector(".refresh"); if (refresh) { refresh.disabled = false; refresh.textContent = "刷新"; }
       }
-      await ensureRouteData({ force: true, background });
+      await (routeRead || ensureRouteData({ force: true, background }));
       if (sequence === contentSequence) scheduleContent();
     }
   }
 }
+
 function pauseContent() {
-  clearTimeout(contentTimer); contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
+  clearTimeout(contentTimer); clearTimeout(contentPaintTimer); contentPaintTimer = null; contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
 }
 function paintActivity() {
   document.querySelectorAll(".avatar[data-avatar-id]").forEach(decorateAvatar);
