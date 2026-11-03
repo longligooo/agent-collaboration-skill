@@ -8,9 +8,9 @@ from test_ui_v04 import DOM_HARNESS, MODEL, NODE
 FIXTURE = r'''
 const entry=(id,body=id)=>({id,type:'turn',author:'agent',identity:'agent',kind:'PROPOSAL',role:'implementer',summary:id,body,created_at:'2026-01-01T00:00:00Z',recipients:[]});
 const thread=(project='p',items=[entry('one','Full body')])=>({project_id:project,project_name:project,thread_id:'same',topic:project,participants:['agent'],coordinator:null,signals:[],turns:[],history:items});
-const snap=(threads=[thread()],stamp='2026-01-01T00:00:00Z')=>({projects:threads.map(t=>({id:t.project_id,name:t.project_id,available:true,threads:[t]})),collaborators:[],overview:{},generated_at:stamp});
-snapshot=snap();location.hash='#/threads/p/same';details.set(routeKey('p','same'),thread());render();
-const response=payload=>({ok:true,json:async()=>payload});
+const snap=(threads=[thread()],stamp='2026-01-01T00:00:00Z')=>({schema_version:1,view:route().name,projects:threads.map(t=>({id:t.project_id,name:t.project_id,available:true,threads:[t]})),collaborators:[],overview:{},generated_at:stamp});
+location.hash='#/threads/p/same';snapshot=snap();snapshot.detail=thread();displayedPageKey=pageCacheKey();details.set(routeKey('p','same'),thread());render();
+const response=payload=>({ok:true,json:async()=>payload.thread?{...snap([payload.thread]),detail:payload.thread}:payload.projects?{...payload,detail:payload.detail||payload.projects[0]?.threads[0]}:payload});
 '''
 
 
@@ -41,9 +41,9 @@ assert.notEqual(clockTime('2026-10-30T15:00:00Z'),'时间未提供');
         self.run_dom(r'''
 (async()=>{
 const shell=root.children[0], message=document.querySelector('.message[data-message-key]');
-let count=0;fetch=async url=>{count++;return response(url.startsWith('/api/snapshot')?snap([thread()],'2026-01-02T00:00:00Z'):{thread:thread()});};
+let count=0;fetch=async url=>{count++;return response(url.startsWith('/api/page')?snap([thread()],'2026-01-02T00:00:00Z'):{thread:thread()});};
 await load({background:true});
-assert.equal(count,2);assert.equal(root.children[0],shell);
+assert.equal(count,1);assert.equal(root.children[0],shell);
 assert.equal(document.querySelector('.message[data-message-key]'),message);
 assert.equal(document.querySelector('.snapshot-time').textContent, '更新于 '+formatTime('2026-01-02T00:00:00Z'));
 assert(!timers.some(t=>!t.cleared&&t.delay===3000));
@@ -58,7 +58,7 @@ const disclosure=original.querySelector('details');disclosure.open=true;disclosu
 const messages=document.querySelector('.messages');messages.scrollTop=120;
 const field=document.querySelector('#thread-search');field.focus();field.setSelectionRange(1,3);threadQuery='p';
 const next=thread('p',[entry('one','Full body'),entry('two'),entry('two')]);
-fetch=async()=>response({thread:next});await ensureRouteData({force:true,background:true});
+fetch=async()=>response({thread:next});await load({background:true});
 assert.equal(document.querySelectorAll('.message[data-message-key]').length,2);
 assert.equal(document.querySelector('.message[data-message-key]'),original);
 assert.equal(original.querySelector('details'),disclosure);assert.equal(disclosure.open,true);
@@ -66,7 +66,7 @@ assert.equal(document.querySelector('.messages').scrollTop,120);
 assert.equal(document.activeElement.getAttribute('id'),'thread-search');
 assert.equal(document.activeElement.selectionStart,1);assert.equal(document.activeElement.selectionEnd,3);
 assert.equal(document.activeElement.getAttribute('value'),'p');
-const nextShell=root.children[0];await ensureRouteData({force:true,background:true});assert.equal(root.children[0],nextShell);
+const nextShell=root.children[0];await load({background:true});assert.equal(root.children[0],nextShell);
 })();
 ''')
 
@@ -79,7 +79,7 @@ const top=index*100-(container?.scrollTop||0);return {top,bottom:top+100};};
 const before=thread('p',[entry('one'),entry('two'),entry('three'),entry('four')]);details.set(routeKey('p','same'),before);render();
 document.querySelector('.messages').scrollTop=125;
 const next=thread('p',[entry('earlier'),...before.history]);fetch=async()=>response({thread:next});
-await ensureRouteData({force:true,background:true});
+await load({background:true});
 assert.equal(document.querySelector('.messages').scrollTop,225);
 })();
 ''')
@@ -95,7 +95,7 @@ const top=200+index*100-window.scrollY;return {top,bottom:top+100};};
 const before=thread('p',[entry('one'),entry('two'),entry('three'),entry('four')]);details.set(routeKey('p','same'),before);render();
 window.scrollY=325;
 fetch=async()=>response({thread:thread('p',[entry('earlier'),...before.history])});
-await ensureRouteData({force:true,background:true});
+await load({background:true});
 assert.equal(window.scrollY,425);assert.equal(document.querySelector('.messages').scrollTop,0);
 })();
 ''')
@@ -105,7 +105,7 @@ assert.equal(window.scrollY,425);assert.equal(document.querySelector('.messages'
 (async()=>{
 document.querySelector('.messages').scrollTop=300;
 fetch=async()=>response({thread:thread('p',[entry('one','Full body'),entry('two')])});
-await ensureRouteData({force:true,background:true});
+await load({background:true});
 const messages=document.querySelector('.messages');assert.equal(messages.scrollTop,messages.scrollHeight);
 })();
 ''')
@@ -114,7 +114,7 @@ const messages=document.querySelector('.messages');assert.equal(messages.scrollT
         self.run_dom(r'''
 (async()=>{
 const waiting=[];fetch=()=>new Promise(resolve=>waiting.push(resolve));
-const first=ensureRouteData({force:true,background:true}), second=ensureRouteData({force:true,background:true});
+const first=load({background:true}), second=load({background:true});
 waiting[1](response({thread:thread('p',[entry('new')])}));await second;
 waiting[0](response({thread:thread('p',[entry('old')])}));await first;
 assert.equal(details.get(routeKey('p','same')).history[0].id,'new');
@@ -128,15 +128,15 @@ assert(!document.querySelector('.messages').textContent.includes('old'));
 (async()=>{
 snapshot=snap([thread('p'),thread('other')]);
 const waiting=[];fetch=()=>new Promise(resolve=>waiting.push(resolve));
-const first=ensureRouteData({force:true,background:true});
-location.hash='#/threads/other/same';const second=ensureRouteData({force:true,background:true});
+const first=load({background:true});
+location.hash='#/threads/other/same';const second=load({background:true});
 waiting[1](response({thread:thread('other',[entry('one','OTHER BODY')])}));await second;
 const otherNode=document.querySelector('.message[data-message-key]');
 waiting[0](response({thread:thread('p',[entry('one','ORIGINAL BODY')])}));await first;
 assert.equal(document.querySelector('.message[data-message-key]'),otherNode);
-assert.equal(details.get(routeKey('p','same')).history[0].body,'ORIGINAL BODY');
+assert.equal(details.has(routeKey('p','same')),false);
 assert.equal(details.get(routeKey('other','same')).history[0].body,'OTHER BODY');
-location.hash='#/threads/p/same';render();
+location.hash='#/threads/p/same';fetch=async()=>response({thread:thread('p')});await load();
 assert.notEqual(document.querySelector('.message[data-message-key]').dataset.messageKey,otherNode.dataset.messageKey);
 })();
 ''')
@@ -144,12 +144,12 @@ assert.notEqual(document.querySelector('.message[data-message-key]').dataset.mes
     def test_manual_refresh_wins_over_inflight_background_snapshot(self):
         self.run_dom(r'''
 (async()=>{
-const waiting=[];fetch=url=>url.startsWith('/api/snapshot')?new Promise(resolve=>waiting.push(resolve)):Promise.resolve(response({thread:thread('p',[entry('fresh')])}));
+const waiting=[];fetch=url=>url.startsWith('/api/page')?new Promise(resolve=>waiting.push(resolve)):Promise.resolve(response({thread:thread('p',[entry('fresh')])}));
 const first=load({background:true}),second=load();
 const newSnapshot=snap();newSnapshot.projects[0].name='FRESH PROJECT';waiting[1](response(newSnapshot));await second;
 const oldSnapshot=snap();oldSnapshot.projects[0].name='STALE PROJECT';waiting[0](response(oldSnapshot));await first;
 assert.equal(snapshot.projects[0].name,'FRESH PROJECT');
-assert.equal(details.get(routeKey('p','same')).history[0].id,'fresh');
+assert.equal(details.get(routeKey('p','same')).history[0].id,'one');
 })();
 ''')
 
@@ -160,8 +160,8 @@ const original=document.querySelector('.message[data-message-key]');
 fetch=async()=>{throw new Error('offline');};await load({background:true});
 assert.equal(details.get(routeKey('p','same')).history.length,1);
 assert.equal(document.querySelector('.message[data-message-key]'),original);
-assert(root.textContent.includes('已加载记录可能不是最新状态'));
-assert(root.textContent.includes('保留已加载记录'));
+assert(root.textContent.includes('可能不是最新状态'));
+assert(root.textContent.includes('保留缓存数据'));
 assert.equal(document.querySelectorAll('.avatar.is-working').length,0);
 const shell=root.children[0];await load({background:true});assert.equal(root.children[0],shell);
 })();
@@ -185,9 +185,9 @@ pauseContent();activitySequence+=1;activityController.abort();
         self.run_dom(r'''
 (async()=>{
 let resolve;fetch=()=>new Promise(done=>{resolve=done;});const pending=load();
-assert.equal(document.querySelector('.refresh').disabled,true);
+assert.equal(document.querySelector('.refresh').disabled,false);
 pauseContent();resolve(response(snap()));await pending;
-fetch=async url=>response(url.startsWith('/api/snapshot')?snap():{thread:thread()});
+fetch=async url=>response(url.startsWith('/api/page')?snap():{thread:thread()});
 await load({background:true});assert.equal(document.querySelector('.refresh').disabled,false);
 assert.equal(document.querySelector('.refresh').textContent,'刷新');
 })();
@@ -196,10 +196,10 @@ assert.equal(document.querySelector('.refresh').textContent,'刷新');
     def test_page_cache_restore_and_mismatched_thread_fail_closed(self):
         self.run_dom(r'''
 (async()=>{
-fetch=async()=>response({thread:thread('wrong-project')});await ensureRouteData({force:true,background:true});
-assert.equal(details.get(routeKey('p','same')).project_id,'p');assert(detailErrors.has(routeKey('p','same')));
+fetch=async()=>response({thread:thread('wrong-project')});await load({background:true});
+assert.equal(details.get(routeKey('p','same')).project_id,'p');assert(error);
 window.dispatch('pagehide');assert.equal(contentSuspended,true);
-let calls=0;fetch=async url=>{calls++;return response(url==='/api/activity'?{runs:[]}:url.startsWith('/api/snapshot')?snap():{thread:thread()});};
+let calls=0;fetch=async url=>{calls++;return response(url.startsWith('/api/activity')?{runs:[]}:url.startsWith('/api/page')?snap():{thread:thread()});};
 await load({background:true});assert.equal(calls,0);
 window.dispatch('pageshow',{persisted:true});await new Promise(resolve=>Promise.resolve().then(resolve));
 assert.equal(contentSuspended,false);assert.equal(calls,1);

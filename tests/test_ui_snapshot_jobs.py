@@ -1,108 +1,102 @@
-"""Async snapshot jobs retain one deadline and cancel only their UI consumer."""
+"""Cache-first page reads replace frontend snapshot-job polling."""
 import unittest
 import test_ui_refresh as refresh
 
-HELPERS = r'''
-const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
-const jobA='a'.repeat(32),jobB='b'.repeat(32);
-const pending=(id=jobA,delay=100)=>({ok:true,status:202,json:async()=>({pending:true,job_id:id,retry_after_ms:delay})});
-const tick=async()=>{const timer=timers.find(t=>!t.cleared&&t.delay>=100&&t.delay<=1000);assert(timer,'expected pending poll');timer.cleared=true;timer.fn();await flush();};
-'''
-
-@unittest.skipUnless(refresh.NODE, "Node.js is needed to execute production UI")
-class UiSnapshotJobTests(unittest.TestCase):
+@unittest.skipUnless(refresh.NODE, 'Node.js required')
+class UiPageCacheTests(unittest.TestCase):
     run_dom = refresh.UiRefreshTests.run_dom
 
-    def test_initial_and_cursor_jobs_poll_without_resetting_batch_deadline(self):
-        self.run_dom(HELPERS + r'''
+    def test_localstorage_visible_synchronously_before_revalidation(self):
+        self.run_dom(r'''
 (async()=>{
-location.hash='#/threads';snapshot=null;const urls=[],signals=[];let reads=0;
-fetch=async(url,{signal})=>{urls.push(url);signals.push(signal);reads++;
- if(reads===1||reads===2)return pending(jobA,100);
- if(reads===3)return response({...snap(),progress:{loaded:1,total:2,complete:false,cursor:'next'}});
- if(reads===4)return pending(jobB,500);
- return response({...snap([thread('p'),thread('q')]),progress:{loaded:2,total:2,complete:true,cursor:null}});};
-const reading=load();await flush();assert.equal(reads,1);assert(urls[0].includes('async=1'));
-assert.equal(timers.filter(t=>t.delay===60000).length,1);
-await tick();assert.equal(reads,2);await tick();assert.equal(reads,4);
-assert.equal(timers.filter(t=>t.delay===60000).length,2);assert.equal(allThreads().length,1);
-assert(urls[3].includes('cursor=next'));assert(urls[3].includes('async=1'));
-await tick();await reading;assert.equal(allThreads().length,2);
-assert.equal(urls[1],'/api/snapshot?job='+jobA);assert.equal(urls[2],urls[1]);
-assert.equal(urls[4],'/api/snapshot?job='+jobB);assert(signals.every(s=>s===signals[0]));
-assert.equal(error,'');assert.equal(snapshotProgress,null);
+location.hash='#/threads?page=2';const key=pageCacheKey(),cached=snap([thread('cached')]);savePageCache(key,cached);memoryPages.clear();snapshot=null;
+let finish;fetch=()=>new Promise(resolve=>{finish=resolve;});const reading=load();
+assert(root.textContent.includes('cached'));assert.equal(snapshot.projects[0].id,'cached');assert.equal(loading,false);
+finish(response(snap([thread('fresh')])));await reading;assert.equal(snapshot.projects[0].id,'fresh');
+assert.equal(JSON.parse(localStorage.getItem(key)).payload.projects[0].id,'fresh');
 })();
 ''')
 
-    def test_abort_during_poll_wait_clears_timer_and_sends_no_more_requests(self):
-        self.run_dom(HELPERS + r'''
+    def test_failed_revalidation_preserves_cache_and_success_replaces_not_merges(self):
+        self.run_dom(r'''
 (async()=>{
-let reads=0;fetch=async()=>{reads++;return pending();};const controller=new AbortController();
-const reading=getJSON('/api/snapshot?progressive=1&async=1',controller.signal).then(()=>{throw Error('must abort');},e=>assert.equal(e.name,'AbortError'));
-await flush();controller.abort();await reading;assert.equal(reads,1);
-assert(!timers.some(t=>!t.cleared&&t.delay===100));
+location.hash='#/threads';savePageCache(pageCacheKey(),snap([thread('old'),thread('deleted')]));
+fetch=async()=>{throw Error('offline');};await load();assert.equal(allThreads().length,2);assert(error);
+fetch=async()=>response(snap([thread('new')]));await load();assert.equal(allThreads().length,1);assert.equal(allThreads()[0].project_id,'new');assert.equal(error,'');
 })();
 ''')
 
-    def test_navigation_shares_pending_job_and_new_refresh_discards_old_result(self):
-        self.run_dom(HELPERS + r'''
+    def test_cache_key_separates_origins_routes_projects_pages_and_queries(self):
+        self.run_dom(r'''
+const keys=[];for(const hash of ['#/threads?page=1','#/threads?page=2','#/threads?page=1&q=hello','#/threads/p/same','#/threads/q/same','#/tasks/agent']){location.hash=hash;keys.push(pageCacheKey());}
+assert.equal(new Set(keys).size,keys.length);const before=pageCacheKey();location.origin='http://localhost:9999';assert.notEqual(pageCacheKey(),before);
+''')
+
+    def test_corrupt_blocked_or_full_storage_never_prevents_fresh_read(self):
+        self.run_dom(r'''
 (async()=>{
-location.hash='#/';snapshot=null;let reads=0,late;const signals=[];
-fetch=(url,{signal})=>{reads++;signals.push(signal);if(reads===1)return Promise.resolve(pending());return new Promise(resolve=>{late=resolve;});};
-const old=load();await flush();location.hash='#/projects';window.dispatch('hashchange');await flush();assert.equal(reads,1);
-await tick();assert.equal(reads,2);
-fetch=async url=>{assert(url.includes('progressive=1'));return response(snap([thread('fresh')]));};
-await load();assert.equal(signals[0].aborted,true);late(response(snap([thread('stale')])));await old;
-assert.equal(allThreads()[0].project_id,'fresh');assert.equal(route().name,'projects');
-assert.equal(error,'');assert.equal(document.querySelector('.refresh').disabled,false);
+location.hash='#/threads';localStorage.setItem(pageCacheKey(),'{broken');assert.equal(readPageCache(pageCacheKey()),null);
+localStorage.getItem=()=>{throw Error('blocked');};localStorage.setItem=()=>{throw Error('quota');};
+fetch=async()=>response(snap([thread('fresh')]));await load();assert.equal(snapshot.projects[0].id,'fresh');assert.equal(error,'');
 })();
 ''')
 
-    def test_hidden_page_aborts_wait_and_visible_page_does_not_restart_content(self):
-        self.run_dom(HELPERS + r'''
+    def test_storage_is_bounded_and_other_app_keys_are_untouched(self):
+        self.run_dom(r'''
+localStorage.setItem('other-app','keep');for(let i=1;i<=30;i++){location.hash=`#/threads?page=${i}`;savePageCache(pageCacheKey(),snap());}
+assert.equal(memoryPages.size,12);assert(localStorage.length<=13);assert.equal(localStorage.getItem('other-app'),'keep');
+''')
+
+    def test_malformed_cache_is_rejected_and_page_number_is_sanitized(self):
+        self.run_dom(r'''
+location.hash='#/threads?page=-2';assert.equal(currentPage(),1);localStorage.setItem(pageCacheKey(),JSON.stringify({schema:1,payload:{projects:'bad'}}));assert.equal(readPageCache(pageCacheKey()),null);
+location.hash='#/threads?page=1e300';assert.equal(currentPage(),1);
+''')
+
+    def test_request_has_one_deadline_and_no_polling(self):
+        self.run_dom(r'''
 (async()=>{
-location.hash='#/';let reads=0;fetch=async url=>{if(url==='/api/activity')return response({runs:[]});reads++;return pending();};
-const reading=load();await flush();document.hidden=true;document.dispatch('visibilitychange');await reading;
-assert.equal(reads,1);assert(!timers.some(t=>!t.cleared&&t.delay===100));
-document.hidden=false;document.dispatch('visibilitychange');await flush();assert.equal(reads,1);
+let calls=0;fetch=(url,{signal})=>{calls++;return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{const e=Error();e.name='AbortError';reject(e);}));};
+const promise=load();const timeout=timers.find(t=>!t.cleared&&t.delay===60000);assert(timeout);timeout.fn();await promise;assert.equal(calls,1);assert(error.includes('读取超时'));assert.equal(loading,false);
 })();
 ''')
 
-    def test_invalid_or_changed_job_ids_fail_without_following_urls(self):
-        self.run_dom(HELPERS + r'''
+    def test_registry_scope_change_evicts_previous_service_cache(self):
+        self.run_dom(r'''
 (async()=>{
-for(const id of ['../outside','https://evil.example/'+jobA,'A'.repeat(32),null]){
- let reads=0;fetch=async()=>{reads++;return pending(id);};
- await assert.rejects(getJSON('/api/snapshot?progressive=1',new AbortController().signal),/后台读取状态无效/);assert.equal(reads,1);
-}
-let reads=0;fetch=async()=>pending(++reads===1?jobA:jobB);const reading=getJSON('/api/snapshot?progressive=1',new AbortController().signal);
-await flush();await tick();await assert.rejects(reading,/后台读取状态无效/);assert.equal(reads,2);
+location.hash='#/threads';acceptCacheScope('old-registry');const old=pageCacheKey();savePageCache(old,snap([thread('old')]));
+fetch=async()=>response({...snap([thread('new')]),cache_scope:'new-registry'});await load();
+assert.equal(localStorage.getItem(old),null);assert(pageCacheKey().includes('new-registry'));assert.equal(snapshot.projects[0].id,'new');
+assert.equal(readPageCache(pageCacheKey()).projects[0].id,'new');
 })();
 ''')
 
-    def test_poll_delays_are_bounded_and_deadline_is_not_extended(self):
-        self.run_dom(HELPERS + r'''
+    def test_malformed_cached_shapes_do_not_block_network(self):
+        self.run_dom(r'''
 (async()=>{
-location.hash='#/';let reads=0;fetch=async()=>{reads++;return pending(jobA,1e12);};
-const reading=load();await flush();assert(timers.some(t=>!t.cleared&&t.delay===1000));
-const deadline=timers.find(t=>!t.cleared&&t.delay===60000);deadline.fn();await reading;
-assert.equal(reads,1);assert(error.includes('读取超时'));assert(!timers.some(t=>!t.cleared&&t.delay===1000));
-for(const delay of [-99,0,'bad',null]){
- const controller=new AbortController();fetch=async()=>pending(jobA,delay);
- const read=getJSON('/api/snapshot?progressive=1',controller.signal).catch(e=>assert.equal(e.name,'AbortError'));
- await flush();assert(timers.some(t=>!t.cleared&&t.delay===100));controller.abort();await read;
-}
+location.hash='#/threads';const key=pageCacheKey();localStorage.setItem(key,JSON.stringify({schema:1,payload:{schema_version:1,view:'threads',projects:[null],collaborators:[]}}));
+let calls=0;fetch=async()=>{calls++;return response(snap([thread('fresh')]));};await load();assert.equal(calls,1);assert.equal(snapshot.projects[0].id,'fresh');
 })();
 ''')
 
-    def test_stable_error_codes_are_safe_and_old_server_status_remains_supported(self):
-        self.run_dom(HELPERS + r'''
+    def test_deep_corrupt_cached_render_still_fetches_fresh_page(self):
+        self.run_dom(r'''
 (async()=>{
-location.hash='#/';const cases=[['snapshot_timeout',503,'读取超时'],['snapshot_busy',503,'后台仍在读取'],['snapshot_expired',410,'结果已过期'],['unknown',503,'读取繁忙']];
-for(const [error_code,status,expected] of cases){
- fetch=async()=>({ok:false,status,json:async()=>({error_code,error:'secret traceback text'})});await load();assert(error.includes(expected));assert(error.includes('保留已加载记录'));assert(!error.includes('secret'));
-}
-fetch=async()=>({ok:false,status:503});await load();assert(error.includes('读取繁忙'));
-fetch=async()=>pending();assert.equal((await getJSON('/api/activity')).pending,true);
+location.hash='#/';const bad={...snap(),overview:{attention:[null]}};localStorage.setItem(pageCacheKey(),JSON.stringify({schema:1,payload:bad}));
+let calls=0;fetch=async()=>{calls++;return response(snap());};await load();assert.equal(calls,1);assert.equal(error,'');assert(snapshot);
 })();
+''')
+
+    def test_mismatched_response_view_cannot_replace_or_cache_current_page(self):
+        self.run_dom(r'''
+(async()=>{
+location.hash='#/threads';savePageCache(pageCacheKey(),snap([thread('old')]));fetch=async()=>response({...snap([thread('wrong')]),view:'projects'});await load();
+assert.equal(snapshot.projects[0].id,'old');assert(error);assert.equal(readPageCache(pageCacheKey()).projects[0].id,'old');
+})();
+''')
+
+    def test_scope_is_remembered_without_storage_access(self):
+        self.run_dom(r'''
+localStorage.getItem=()=>{throw Error('blocked');};localStorage.setItem=()=>{throw Error('blocked');};
+acceptCacheScope('one');savePageCache(pageCacheKey(),snap());acceptCacheScope('one');assert.equal(memoryPages.size,1);assert(pageCacheKey().includes(':one:'));
 ''')

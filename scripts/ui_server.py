@@ -840,6 +840,29 @@ class CollaborationHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/page":
+            try:
+                import ui_pages
+                query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+                if set(query) - {"view", "project_id", "thread_id", "identity", "page", "q"} or any(len(v) != 1 for v in query.values()):
+                    raise collab.CollaborationError("invalid page query")
+                arguments = {key: values[0] for key, values in query.items()}
+                number = arguments.get("page", "1")
+                if not re.fullmatch(r"[1-9][0-9]{0,6}", number):
+                    raise collab.CollaborationError("invalid page number")
+                arguments["page"] = int(number)
+                origin = registry_path()
+                key = (str(origin.resolve()), tuple(sorted(arguments.items())))
+                payload = ui_pages.READS.read(key, lambda: ui_pages.page_data(path=origin, **arguments))
+                payload["port"] = self.server.server_address[1]
+                self.respond(200, payload)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # The read is complete; a disconnected browser needs no second response.
+            except (read_budget.ReadTimeout, ui_pages.PageReadError) as exc:
+                self.respond(getattr(exc, "status", 504), {"result": "ERROR", "error": str(exc)})
+            except (collab.CollaborationError, OSError, ValueError, TypeError, KeyError) as exc:
+                self.respond(400, {"result": "ERROR", "error": str(exc)})
+            return
         if path == "/api/snapshot":
             try:
                 query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
@@ -890,19 +913,22 @@ class CollaborationHandler(BaseHTTPRequestHandler):
         if path in {"/api/thread", "/api/activity"}:
             try:
                 query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
-                if any(len(values) != 1 for values in query.values()):
-                    raise collab.CollaborationError("query parameters must occur once")
                 if path == "/api/activity":
-                    if query:
-                        raise collab.CollaborationError("activity does not accept query parameters")
+                    if set(query) - {"project_id"}:
+                        raise collab.CollaborationError("unsupported activity scope")
                     import runtime_activity
                     import task_discovery
                     roots = task_discovery.registered_roots()
+                    if "project_id" in query:
+                        wanted = set(query["project_id"])
+                        if not wanted <= {project_id(str(root)) for root in roots}:
+                            raise collab.CollaborationError("unknown activity project")
+                        roots = [root for root in roots if project_id(str(root)) in wanted]
                     payload = runtime_activity.activity_snapshot(roots)
                     import manual_ingress
                     payload["manual_observations"] = manual_ingress.snapshot(roots)
                 else:
-                    if set(query) != {"project_id", "thread_id"}:
+                    if set(query) != {"project_id", "thread_id"} or any(len(v) != 1 for v in query.values()):
                         raise collab.CollaborationError("thread requires project_id and thread_id only")
                     payload = thread_detail(query["project_id"][0], query["thread_id"][0])
             except (collab.CollaborationError, OSError, ValueError, TypeError, KeyError) as exc:

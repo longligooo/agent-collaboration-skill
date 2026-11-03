@@ -24,19 +24,16 @@ const taskErrors = new Map();
 const taskPending = new Set();
 const disclosureState = new Set();
 const scrollState = new Map();
-let contentGeneration = 0;
 let contentLoading = false;
-let completedSnapshot = null;
-let completedVersion = null;
-const detailDirty = new Set();
-const taskDirty = new Set();
-let contentPaintTimer = null;
 let contentController = null;
 let contentSequence = 0;
 let contentSuspended = false;
-const contentRequests = new Map();
 const REQUEST_TIMEOUT_MS = 60000;
-let snapshotProgress = null;
+const PAGE_CACHE_PREFIX = "collab.page.v1:";
+const PAGE_CACHE_LIMIT = 12;
+const memoryPages = new Map();
+let displayedPageKey = null;
+let memoryScope = null;
 let reusableMessages = new Map();
 try { selectedIdentity = localStorage.getItem("collab.viewIdentity") || ""; } catch (_) { /* Optional preference. */ }
 
@@ -69,7 +66,54 @@ function icon(name) {
   node.append(svgNode("path", { d: iconPaths[name] || iconPaths.thread }));
   return node;
 }
-function route() { return M.parseRoute(location.hash); }
+function route() { return M.parseRoute(location.hash.split("?")[0]); }
+function pageQuery() { return new URLSearchParams(location.hash.split("?")[1] || ""); }
+function currentPage() { const n = Number(pageQuery().get("page") || 1); return Number.isSafeInteger(n) && n > 0 ? n : 1; }
+function pageRequest() {
+  const current = route(), params = new URLSearchParams({view: current.name, page: String(currentPage())});
+  if (current.projectId || current.name === "project") params.set("project_id", current.projectId || current.id);
+  if (current.threadId) params.set("thread_id", current.threadId);
+  if (["tasks", "person"].includes(current.name)) params.set("identity", current.id || selectedIdentity || "");
+  if (pageQuery().get("q")) params.set("q", pageQuery().get("q"));
+  return params;
+}
+function cacheNamespace() { return PAGE_CACHE_PREFIX + (location.origin || "local") + (location.pathname || "/") + ":"; }
+function rememberedScope() { if(memoryScope?.namespace===cacheNamespace())return memoryScope.scope;try{return localStorage.getItem(cacheNamespace()+"scope") || "unknown";}catch(_){return "unknown";} }
+function pageCacheKey(params = pageRequest()) { return cacheNamespace() + rememberedScope() + ":" + params.toString(); }
+function acceptCacheScope(scope) {
+  if(typeof scope!=="string" || !scope || scope===rememberedScope())return;
+  memoryPages.clear(); memoryScope={namespace:cacheNamespace(),scope};
+  try {
+    const prefix=cacheNamespace(), old=[];
+    for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i);if(key?.startsWith(prefix))old.push(key);}
+    for(const key of old)localStorage.removeItem(key);
+    localStorage.setItem(prefix+"scope",scope);
+  }catch(_){ /* Storage may be unavailable. */ }
+}
+function pagination() {
+  const page = snapshot?.page;
+  if (!page || !Number.isInteger(page.total_pages)) return null;
+  const change = number => {
+    const params = pageQuery(); params.set("page", String(number));
+    const hash = `${location.hash.split("?")[0] || "#/"}?${params}`;
+    if (hash === location.hash) load(); else location.hash = hash;
+  };
+  return h("nav", {class:"pagination", "aria-label":"线程分页"},
+    h("button", {type:"button", class:"refresh", disabled:page.number <= 1, onclick:()=>change(page.number - 1)}, "上一页"),
+    h("span", {class:"meta"}, `第 ${page.number} / ${Math.max(1,page.total_pages)} 页 · 共 ${page.total} 条 · 每页 20 条`),
+    h("button", {type:"button", class:"refresh", disabled:page.number >= page.total_pages, onclick:()=>change(page.number + 1)}, "下一页"));
+}
+function submitThreadQuery(value) {
+  const params = pageQuery(); params.set("page", "1");
+  if (value.trim()) params.set("q", value.trim()); else params.delete("q");
+  const hash = `${location.hash.split("?")[0]}?${params}`;
+  if (hash === location.hash) load(); else location.hash = hash;
+}
+function threadSearch() {
+  return h("form", {class:"search", onsubmit:event=>{event.preventDefault();submitThreadQuery(threadQuery);}}, icon("search"),
+    h("input", {id:"thread-search", value:threadQuery, placeholder:"搜索线程…", "aria-label":"搜索线程", oninput:event=>{threadQuery=event.target.value;}}),
+    h("button", {type:"submit", class:"filter"}, "搜索"));
+}
 function routeKey(projectId, threadId) { return JSON.stringify([projectId, threadId]); }
 function threadHref(projectId, threadId) { return `#/threads/${encodeURIComponent(projectId)}/${encodeURIComponent(threadId)}`; }
 function taskHref(identity) { return `#/tasks/${encodeURIComponent(identity)}`; }
@@ -237,13 +281,13 @@ function runningMessages(thread) {
   return [...processMessages, ...evidence.map(row => h("article", { class: "message evidence-message", "data-evidence-key": `${row.project_id}/${row.binding_id}/${row.evidence_kind}` }, avatar(row.identity, row.participant || row.identity), h("div", { class: "message-main" }, h("div", { class: "message-header" }, row.participant || row.identity, h("span", { class: "message-role" }, row.evidence_kind === "hook-event-observed" ? "Hook 事件观测" : "Agent 自报")), h("div", { class: "bubble evidence-bubble" }, h("strong", {}, row.evidence_active ? (row.evidence_kind === "hook-event-observed" ? "近期收到工具事件" : "协作者自报工作中") : ({ unknown: "未知 / 证据已过期", ended: "已收到结束事件", revoked: "绑定已撤销", waiting: "自报等待", idle: "自报空闲" }[row.status] || "未确认状态")), h("p", {}, "不是独立进程观测，不显示进程执行动效。")), h("div", { class: "message-footer" }, `来源：${row.evidence_kind}`, `观测 ${clockTime(row.observed_at)}`))))];
 }
 function threadList(current) {
-  const items = allThreads().filter(thread => `${thread.topic} ${thread.thread_id} ${thread.project_name}`.toLowerCase().includes(threadQuery.toLowerCase()));
+  const items = allThreads();
   return h("aside", { class: `threadlist${mobileThreads ? " mobile-open" : ""}`, "aria-label": "线程列表" },
-    h("div", { class: "search" }, icon("search"), h("input", { id: "thread-search", value: threadQuery, placeholder: "搜索线程…", "aria-label": "搜索线程", oninput: event => { const position = event.target.selectionStart; threadQuery = event.target.value; render(); const field = document.querySelector("#thread-search"); field?.focus(); field?.setSelectionRange(position, position); } })),
+    threadSearch(),
     h("div", { class: "section-cap" }, h("span", {}, "项目线程"), `${items.length} 个`),
     items.length ? items.map(thread => h("a", { class: `thread-item${thread.project_id === current.project_id && thread.thread_id === current.thread_id ? " active" : ""}`, href: threadHref(thread.project_id, thread.thread_id) },
       h("div", { class: "thread-meta" }, thread.project_name, h("span", {}, formatTime(M.lastActivityAt(thread)))), h("h3", {}, thread.topic), h("p", { class: "thread-preview" }, thread.objective || thread.thread_id), h("div", { class: "thread-bottom" }, avatarStack(thread), statusPill(thread.status)))) : h("p", { class: "quiet" }, "没有匹配线程。"),
-    h("p", { class: "list-info" }, "头像下像素条表示当前工作中。跨线程共享同一身份；历史头像反映当前状态。"));
+    pagination(), h("p", { class: "list-info" }, "头像下像素条表示当前工作中。跨线程共享同一身份；历史头像反映当前状态。"));
 }
 function blockerLabel(item) {
   const labels = {"missing-evidence": "缺少验证证据", "stale-evidence": "验证证据不对应当前代码", "failed-evidence": "验证未成功结束", "blocked-evidence": "验证仍有阻塞项", "changed-log": "验证日志缺失或已变化", "missing-review": "缺少独立审阅", "stale-review": "审阅不对应当前代码", "review-not-passed": "审阅尚未通过", "self-review": "审阅必须独立于实现者", "unreviewed-evidence": "当前证据尚未全部审阅", "waiting": "仍在等待同伴或人工", "blocked-task": "检查点处于阻塞状态"};
@@ -271,7 +315,7 @@ function inspector(thread) {
 }
 function renderThread(projectId, threadId) {
   const base = findThread(projectId, threadId);
-  if (!base && !(snapshotProgress && details.has(routeKey(projectId, threadId)))) return pendingEmpty("没有这个线程。");
+  if (!base && !details.has(routeKey(projectId, threadId))) return pendingEmpty("没有这个线程。");
   const key = routeKey(projectId, threadId), thread = details.get(key) || base;
   const entries = uniqueHistory(thread), visible = entries.filter(entry => messageFilter === "all" || messageKind(entry) === messageFilter);
   const kinds = [...new Set(entries.map(messageKind).filter(Boolean))];
@@ -292,19 +336,19 @@ function threadCards(threads) {
 function renderOverview() {
   if (!M.array(snapshot.projects).length) return emptyState();
   const overview = snapshot.overview || {};
-  return h("div", {}, h("div", { class: "stats" }, [[overview.projects, "项目"], [overview.threads, "线程"], [overview.collaborators, "协作者"], [overview.pending, "待处理通知"]].map(([value, label]) => h("div", { class: "stat" }, h("b", {}, value || 0), h("span", {}, label)))),
-    h("div", { class: "split" }, h("section", { class: "panel" }, h("h2", {}, "需要处理"), M.array(overview.attention).length ? h("div", { class: "stack" }, overview.attention.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.topic || item.thread_id), h("div", { class: "quiet" }, `${item.project_name} · ${item.from || "?"} → ${item.to}`), h("span", { class: "pill attention" }, item.requested_action || item.decision)))) : pendingEmpty("没有待处理的通知。")),
+  return h("div", {}, h("div", { class: "stats" }, [[overview.projects, "项目"], [overview.threads, "线程"], [overview.collaborators, "协作者"], [overview.pending, "待处理通知"]].map(([value, label]) => h("div", { class: "stat" }, h("b", {}, value == null ? "—" : value), h("span", {}, label)))),
+    h("div", { class: "split" }, h("section", { class: "panel" }, h("h2", {}, overview.pending > M.array(overview.attention).length ? `需要处理（显示前 ${M.array(overview.attention).length} 条）` : "需要处理"), M.array(overview.attention).length ? h("div", { class: "stack" }, overview.attention.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.topic || item.thread_id), h("div", { class: "quiet" }, `${item.project_name} · ${item.from || "?"} → ${item.to}`), h("span", { class: "pill attention" }, item.requested_action || item.decision)))) : pendingEmpty("没有待处理的通知。")),
       h("section", { class: "panel" }, h("h2", {}, "最近动态"), M.array(overview.recent).length ? h("div", { class: "stack" }, overview.recent.map(item => h("a", { class: "row", href: threadHref(item.project_id, item.thread_id) }, h("strong", {}, item.title || item.topic), h("div", { class: "quiet" }, `${item.project_name} · ${item.author} · ${item.kind}`), item.summary ? h("p", {}, item.summary) : null))) : pendingEmpty("还没有协作记录。"))));
 }
-function renderProjects() { return M.array(snapshot.projects).length ? h("div", { class: "stack" }, snapshot.projects.map(project => h("a", { class: "card", href: `#/projects/${encodeURIComponent(project.id)}` }, h("div", { class: "card-top" }, h("strong", {}, project.name), h("span", { class: "meta" }, project.available ? `${M.array(project.threads).length} 个线程` : "目录不可用")), h("p", { class: "path" }, project.root)))) : emptyState(); }
-function renderProject(id) { const project = findProject(id); return !project ? pendingEmpty("没有这个项目。") : project.available ? h("div", {}, h("p", { class: "path" }, project.root), h("div", { class: "auto-project-entry" }, h("div", {}, h("strong", {}, "自动协作任务"), h("p", { class: "quiet" }, "协调者先规划，确认团队后再执行。手动线程保持不变。")), h("a", { class: "auto-btn primary", href: `#/auto/${encodeURIComponent(id)}` }, "打开自动协作 →")), threadCards(M.array(project.threads))) : missing("这个目录已经不在本机上。"); }
+function renderProjects() { return M.array(snapshot.projects).length ? h("div", { class: "stack" }, snapshot.projects.map(project => h("a", { class: "card", href: `#/projects/${encodeURIComponent(project.id)}` }, h("div", { class: "card-top" }, h("strong", {}, project.name), h("span", { class: "meta" }, project.available ? `${project.thread_count ?? M.array(project.threads).length} 个线程` : "目录不可用")), h("p", { class: "path" }, project.root)))) : emptyState(); }
+function renderProject(id) { const project = findProject(id); return !project ? pendingEmpty("没有这个项目。") : project.available ? h("div", {}, h("p", { class: "path" }, project.root), h("div", { class: "auto-project-entry" }, h("div", {}, h("strong", {}, "自动协作任务"), h("p", { class: "quiet" }, "协调者先规划，确认团队后再执行。手动线程保持不变。")), h("a", { class: "auto-btn primary", href: `#/auto/${encodeURIComponent(id)}` }, "打开自动协作 →")), threadCards(M.array(project.threads)), pagination()) : missing("这个目录已经不在本机上。"); }
 function renderPeople() {
   return people().length ? h("div", { class: "people-grid" }, people().map(person => {
     const identity = personIdentity(person), human = person.actor_type === "human" || humanIdentities().includes(identity);
-    return h("section", { class: "person-card" }, h("div", { class: "person-head" }, avatar(identity, person.display_name || identity, "lg", human), h("div", {}, h("h3", {}, person.display_name || identity), h("p", { class: "quiet" }, human ? "人类来源身份" : "稳定协作身份"))), h("dl", {}, h("dt", {}, "身份键"), h("dd", {}, identity), h("dt", {}, "参与"), h("dd", {}, `${M.array(person.projects).length} 项目 · ${M.array(person.threads).length} 线程`), h("dt", {}, "本地别名"), h("dd", {}, M.array(person.aliases).map(alias => alias.agent).join("、") || person.id), h("dt", {}, "通知"), h("dd", {}, `${person.pending || 0} 条待处理；通知不代表执行中`)), h("div", { class: "pills" }, M.array(person.tools).map(tool => h("span", { class: "pill" }, tool))), h("a", { class: "text-link", href: taskHref(identity) }, "查看该协作者的任务 →"), h("a", { class: "text-link", href: `#/people/${encodeURIComponent(identity)}` }, "查看参与线程 →"));
+    return h("section", { class: "person-card" }, h("div", { class: "person-head" }, avatar(identity, person.display_name || identity, "lg", human), h("div", {}, h("h3", {}, person.display_name || identity), h("p", { class: "quiet" }, human ? "人类来源身份" : "稳定协作身份"))), h("dl", {}, h("dt", {}, "身份键"), h("dd", {}, identity), h("dt", {}, "参与"), h("dd", {}, `${M.array(person.projects).length} 项目 · ${person.thread_count ?? M.array(person.threads).length} 线程`), h("dt", {}, "本地别名"), h("dd", {}, M.array(person.aliases).map(alias => alias.agent).join("、") || person.id), h("dt", {}, "通知"), h("dd", {}, `${person.pending == null ? "未汇总" : person.pending + " 条待处理"}；通知不代表执行中`)), h("div", { class: "pills" }, M.array(person.tools).map(tool => h("span", { class: "pill" }, tool))), h("a", { class: "text-link", href: taskHref(identity) }, "查看该协作者的任务 →"), h("a", { class: "text-link", href: `#/people/${encodeURIComponent(identity)}` }, "查看参与线程 →"));
   })) : emptyState();
 }
-function renderPerson(id) { const person = people().find(item => personIdentity(item) === id); return person ? threadCards(M.array(person.threads)) : pendingEmpty("没有这个协作者。"); }
+function renderPerson(id) { const person = people().find(item => personIdentity(item) === id); return person ? h("div", {}, threadCards(M.array(person.threads)), pagination()) : pendingEmpty("没有这个协作者。"); }
 function selectIdentity(identity) { selectedIdentity = identity; try { localStorage.setItem("collab.viewIdentity", identity); } catch (_) { /* Optional preference. */ } location.hash = taskHref(identity); if (route().id === identity) render(); }
 function taskCard(item) {
   const task = item.coding_task, checkpoint = task?.checkpoint || {};
@@ -322,10 +366,10 @@ function renderTasks(identity) {
     failure ? h("div", { class: "banner" }, `读取任务失败：${failure}`) : null,
     !result ? missing(taskPending.has(identity) ? "正在读取任务…" : "尚未读取任务。") : h("div", { class: "task-columns" }, ["actionable", "waiting-peer", "waiting-human"].filter(category => taskCategory === "all" || taskCategory === category).map(category => { const items = M.array(result.items).filter(item => item.classification === category); return h("section", { class: `task-column ${category}` }, h("h3", {}, h("i", { class: "column-dot" }), M.categoryLabel(category), h("small", {}, `${items.length} 项`)), items.length ? items.map(taskCard) : h("div", { class: "task-empty" }, "当前没有此类任务。")); })),
     M.array(result?.errors).length ? disclosure(`tasks/${identity}/errors`, `${result.errors.length} 个项目或线程读取异常`, h("div", {}, result.errors.map(item => h("p", {}, `${item.project_root || item.thread_id || ""}：${item.error}`))), "task-errors") : null,
-    h("p", { class: "tasks-note" }, "这里只读任务与检查点。查看任务不会执行命令、发送消息或确认通知；“可继续处理”不代表当前正在执行。"));
+    pagination(), h("p", { class: "tasks-note" }, "这里只读任务与检查点。查看任务不会执行命令、发送消息或确认通知；“可继续处理”不代表当前正在执行。"));
 }
-function pendingEmpty(message) { return missing(snapshotProgress ? (error ? "部分记录尚未读取，请刷新重试。" : "正在分批读取记录…") : message); }
-function emptyState() { if (snapshotProgress) return pendingEmpty(""); return h("div", { class: "empty" }, "还没有注册到本机界面的项目。在项目里执行 ", h("code", {}, "python scripts/collab.py ui --root ."), " 后，这里会显示线程和协作者。"); }
+function pendingEmpty(message) { return missing(message); }
+function emptyState() { return h("div", { class: "empty" }, "还没有注册到本机界面的项目。在项目里执行 ", h("code", {}, "python scripts/collab.py ui --root ."), " 后，这里会显示线程和协作者。"); }
 function missing(message) { return h("div", { class: "empty" }, message); }
 function pageTitle(current) {
   if (current.name === "auto") return window.AutoUI.title(current);
@@ -404,7 +448,7 @@ function render() {
   else if (current.name === "overview") body = renderOverview();
   else if (current.name === "projects") body = renderProjects();
   else if (current.name === "project") body = renderProject(current.id);
-  else if (current.name === "threads") body = threadCards(allThreads());
+  else if (current.name === "threads") body = h("div", {}, threadSearch(), threadCards(allThreads()), pagination());
   else if (current.name === "thread") body = renderThread(current.projectId, current.threadId);
   else if (current.name === "people") body = renderPeople();
   else if (current.name === "person") body = renderPerson(current.id);
@@ -414,277 +458,108 @@ function render() {
     h("div", { class: "rail-label" }, "WORKSPACE"), h("nav", { "aria-label": "主导航" }, nav("总览", "#/", active === "overview", "overview"), nav("项目", "#/projects", active === "projects", "project"), nav("协作线程", "#/threads", active === "threads", "thread"), nav("我的任务", taskHref(selectedIdentity || ""), active === "tasks", "tasks"), nav("协作者", "#/people", active === "people", "people")),
     h("div", { class: "sidebar-foot" }, h("p", {}, current.name === "auto" ? "本机自动协作 · 显式授权" : "本机只读界面"), h("code", {}, `127.0.0.1:${snapshot?.port || 23451}`), h("p", {}, "像素条表示当前工作中；等待或状态过期时不显示。"))),
     h("main", { class: `main${current.name === "thread" ? " thread-page" : ""}` }, error ? h("div", { class: "banner" }, error) : null,
-      snapshotProgress ? h("div", { class: "banner snapshot-progress", role: "status" }, `${error ? "读取中断" : "分批读取中"}：${snapshotProgress.loaded} / ${snapshotProgress.total} 个线程。统计为已读取部分，刷新完成前保留旧记录。`) : null,
       h("header", { class: "top" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, subtitle)), h("div", { class: "top-actions" }, snapshot ? h("span", { class: "meta snapshot-time" }, `更新于 ${formatTime(snapshot.generated_at)}`) : null, h("button", { type: "button", class: "refresh", disabled: loading, onclick: () => current.name === "auto" ? window.AutoUI.refresh(current) : load() }, loading ? "读取中…" : "刷新"), current.name === "thread" ? h("button", { class: "mobile-threads", type: "button", "aria-expanded": mobileThreads, onclick: () => { mobileThreads = !mobileThreads; render(); } }, "切换线程") : null)), body)));
   reusableMessages = new Map();
   restoreMessages();
   restoreView(savedView);
   paintActivity();
 }
-function snapshotAbortError() {
-  const error = new Error("Snapshot request aborted"); error.name = "AbortError"; return error;
-}
-function waitForSnapshot(delay, signal) {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(snapshotAbortError()); return; }
-    const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(snapshotAbortError()); };
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
 async function getJSON(url, signal) {
-  const isSnapshot = url.startsWith("/api/snapshot?") || url === "/api/snapshot";
-  let job = null, polls = 0;
-  while (true) {
-    if (signal?.aborted) throw snapshotAbortError();
-    const response = await fetch(url, { cache: "no-store", signal });
-    if (signal?.aborted) throw snapshotAbortError();
-    if (!response.ok) {
-      const snapshotErrors = { 409: "本次增量读取未完成，请点击刷新重试", 410: "分批读取游标已过期，请点击刷新重试", 413: "记录超过增量缓存容量，需减少读取范围或调整服务端容量", 503: "读取繁忙，请稍后点击刷新重试", 504: "读取超时，请检查项目路径或 Git 是否响应后重试" };
-      const codes = { snapshot_timeout: snapshotErrors[504], snapshot_busy: "后台仍在读取项目，请稍候再刷新；反复刷新不会加快读取", snapshot_expired: "本次读取结果已过期，请点击刷新重试" };
-      let failure = null;
-      if (isSnapshot) { try { failure = await response.json(); } catch (_) { /* Older servers may not return JSON. */ } }
-      throw new Error(isSnapshot && (codes[failure?.error_code] || snapshotErrors[response.status]) || `读取失败（${response.status}）`);
-    }
-    const payload = await response.json();
-    if (signal?.aborted) throw snapshotAbortError();
-    if (!isSnapshot || response.status !== 202) return payload;
-    // One logical batch keeps the caller's original deadline and abort signal.
-    // Poll only the issued same-origin job, never a server-supplied URL.
-    if (!payload || payload.pending !== true || typeof payload.job_id !== "string" || !/^[0-9a-f]{32}$/.test(payload.job_id) || (job && job !== payload.job_id) || ++polls > 600) {
-      throw new Error("返回的后台读取状态无效，请点击刷新重试");
-    }
-    job = payload.job_id;
-    const delay = typeof payload.retry_after_ms === "number" && Number.isFinite(payload.retry_after_ms) ? Math.max(100, Math.min(1000, payload.retry_after_ms)) : 100;
-    await waitForSnapshot(delay, signal);
-    url = `/api/snapshot?${new URLSearchParams({ job })}`;
-  }
+  const response = await fetch(url, {signal, cache:"no-store"});
+  if (!response.ok) throw new Error(`读取失败（${response.status}）`);
+  return response.json();
 }
 function contentSignature(payload) {
-  // Server sampling time alone must not remount an unchanged conversation.
   if (!payload || typeof payload !== "object") return JSON.stringify(payload);
-  const { generated_at, ...content } = payload;
+  const {generated_at, ...content} = payload;
   return JSON.stringify(content);
 }
-function cancelContentRequests() {
-  contentGeneration += 1;
-  for (const request of contentRequests.values()) request.controller.abort();
-  contentRequests.clear(); detailPending.clear(); taskPending.clear();
+function validPage(payload) {
+  const object=value=>value!==null && typeof value==="object" && !Array.isArray(value);
+  const thread=value=>object(value) && typeof value.thread_id==="string" && (!value.history || (Array.isArray(value.history) && value.history.every(object))) && (!value.turns || (Array.isArray(value.turns) && value.turns.every(object)));
+  const current=route();
+  if(!object(payload) || payload.schema_version!==1 || payload.view!==current.name ||
+    !Array.isArray(payload.projects) || !payload.projects.every(p=>object(p) && typeof p.id==="string" && Array.isArray(p.threads) && p.threads.every(thread)) ||
+    !Array.isArray(payload.collaborators) || !payload.collaborators.every(p=>object(p) && typeof (p.identity || p.id)==="string"))return false;
+  if(payload.page && (!object(payload.page) || !Number.isInteger(payload.page.number) || payload.page.number<1 || payload.page.size!==20 || !Number.isInteger(payload.page.total) || payload.page.total<0 || !Number.isInteger(payload.page.total_pages) || payload.page.total_pages<1))return false;
+  if(["project","thread","auto"].includes(current.name) && !payload.projects.some(p=>p.id===(current.projectId || current.id)))return false;
+  if(current.name==="thread" && (!thread(payload.detail) || payload.detail.project_id!==current.projectId || payload.detail.thread_id!==current.threadId))return false;
+  if(payload.tasks && (!object(payload.tasks) || !Array.isArray(payload.tasks.items) || !payload.tasks.items.every(object)))return false;
+  return true;
 }
-async function ensureRouteData({ force = false, background = false } = {}) {
-  if (!snapshot || document.hidden || contentSuspended) return;
-  const current = route(), generation = contentGeneration;
-  const isThread = current.name === "thread";
-  const identity = current.id || selectedIdentity || (people()[0] && personIdentity(people()[0]));
-  if (!isThread && (current.name !== "tasks" || !identity)) return;
-  const key = isThread ? routeKey(current.projectId, current.threadId) : identity;
-  const requestKey = JSON.stringify([isThread ? "thread" : "tasks", key]);
-  const cache = isThread ? details : tasks, failures = isThread ? detailErrors : taskErrors, pending = isThread ? detailPending : taskPending;
-  const dirty = isThread ? detailDirty : taskDirty;
-  if (!force && (pending.has(key) || (cache.has(key) && !dirty.has(key) && !failures.has(key)))) return;
-  contentRequests.get(requestKey)?.controller.abort();
-  const request = { controller: new AbortController() };
-  contentRequests.set(requestKey, request); pending.add(key);
-  const firstLoad = !cache.has(key);
-  if (firstLoad && !background) render();
-  const timeout = setTimeout(() => request.controller.abort(), REQUEST_TIMEOUT_MS);
-  let changed = false;
-  const valid = () => generation === contentGeneration && contentRequests.get(requestKey) === request && !request.controller.signal.aborted;
+function renderPageSafely() {
+  try { render();return true; }
+  catch (_) { snapshot=null;details.clear();tasks.clear();error="缓存记录格式无效，正在重新读取页面。";render();return false; }
+}
+function readPageCache(key) {
+  if (memoryPages.has(key)) return memoryPages.get(key);
   try {
-    const url = isThread ? `/api/thread?${new URLSearchParams({ project_id: current.projectId, thread_id: current.threadId })}` : `/api/tasks?${new URLSearchParams({ identity })}`;
-    const payload = await getJSON(url, request.controller.signal);
-    if (!valid()) return;
-    const value = isThread ? payload?.thread : payload;
-    if (!value || (isThread && (value.project_id !== current.projectId || value.thread_id !== current.threadId))) throw new Error("返回的记录数据格式无效");
-    changed = contentSignature(cache.get(key)) !== contentSignature(value) || failures.has(key);
-    cache.set(key, value); failures.delete(key); dirty.delete(key);
-  } catch (exc) {
-    // A timeout is a read failure; superseded or hidden-page requests are not.
-    if (generation === contentGeneration && contentRequests.get(requestKey) === request) {
-      const message = exc.name === "AbortError" ? "读取超时" : exc.message;
-      changed = failures.get(key) !== message; failures.set(key, message);
+    const record = JSON.parse(localStorage.getItem(key) || "null");
+    if (record?.schema !== 1 || !validPage(record.payload)) return null;
+    return record.payload;
+  } catch (_) { return null; }
+}
+function savePageCache(key, payload) {
+  memoryPages.delete(key); memoryPages.set(key, payload);
+  while (memoryPages.size > PAGE_CACHE_LIMIT) memoryPages.delete(memoryPages.keys().next().value);
+  try {
+    const value = JSON.stringify({schema:1, saved_at:Date.now(), payload});
+    // Large conversations remain available in memory without exhausting origin storage.
+    if (value.length > 1500000) return;
+    const keys = [];
+    for (let i=0;i<localStorage.length;i++) { const k=localStorage.key(i); if(k?.startsWith(PAGE_CACHE_PREFIX) && !k.endsWith(":scope")) keys.push(k); }
+    keys.sort((a,b)=>{try{return (JSON.parse(localStorage.getItem(a))?.saved_at||0)-(JSON.parse(localStorage.getItem(b))?.saved_at||0);}catch(_){return 0;}});
+    while (keys.filter(k=>k!==key).length >= PAGE_CACHE_LIMIT) {const old=keys.shift();if(old!==key)localStorage.removeItem(old);}
+    localStorage.setItem(key,value);
+  } catch (_) { /* Quota, blocked storage, or malformed old entries never blocks reads. */ }
+}
+function applyPage(payload, key) {
+  snapshot=payload; displayedPageKey=key;
+  details.clear(); tasks.clear(); detailErrors.clear(); taskErrors.clear();
+  if(payload.detail?.project_id && payload.detail?.thread_id) details.set(routeKey(payload.detail.project_id,payload.detail.thread_id),payload.detail);
+  if(payload.tasks) {
+    const identity=payload.tasks.identity || payload.identity || route().id || selectedIdentity || (people()[0] && personIdentity(people()[0]));
+    if(identity)tasks.set(identity,payload.tasks);
+  }
+}
+async function load({background=false, reason="refresh"}={}) {
+  if(document.hidden || contentSuspended)return;
+  const params=pageRequest(), key=pageCacheKey(params), sequence=++contentSequence;
+  contentController?.abort();
+  const controller=new AbortController();contentController=controller;contentLoading=true;
+  const cached=readPageCache(key);
+  const oldSignature=contentSignature(snapshot);
+  const samePage=displayedPageKey===key;
+  if(!samePage){error="";threadQuery=pageQuery().get("q") || "";}
+  if(cached)applyPage(cached,key);
+  else if(!samePage){snapshot=null;details.clear();tasks.clear();displayedPageKey=key;}
+  loading=!snapshot;
+  if(!samePage || oldSignature!==contentSignature(snapshot) || loading){if(!renderPageSafely()){memoryPages.delete(key);try{localStorage.removeItem(key);}catch(_){}}}
+  const timeout=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
+  const valid=()=>sequence===contentSequence && pageCacheKey()===key && !controller.signal.aborted;
+  try {
+    const payload=await getJSON(`/api/page?${params}`,controller.signal);
+    if(!valid())return;
+    if(!validPage(payload))throw new Error("返回的页面数据格式无效");
+    const selected=route();
+    if(selected.name==="thread" && (!payload.detail || payload.detail.project_id!==selected.projectId || payload.detail.thread_id!==selected.threadId))throw new Error("返回的线程与当前页面不符");
+    const changed=contentSignature(snapshot)!==contentSignature(payload) || !!error;
+    const previous=snapshot;applyPage(payload,key);error="";
+    if(changed){
+      try{render();}catch(_){if(previous)applyPage(previous,key);else{snapshot=null;details.clear();tasks.clear();}throw new Error("返回的页面记录格式无效");}
     }
+    acceptCacheScope(payload.cache_scope);const freshKey=pageCacheKey(params);displayedPageKey=freshKey;savePageCache(freshKey,payload);
+    if(!changed){const stamp=document.querySelector(".snapshot-time");if(stamp)stamp.textContent=`更新于 ${formatTime(snapshot.generated_at)}`;}
+  } catch(exc) {
+    if(sequence!==contentSequence || pageCacheKey()!==key)return;
+    const previousError=error; error=`${exc.name==="AbortError"?"读取超时":exc.message || "无法读取页面"}。${snapshot?"保留缓存数据，可能不是最新状态。":"请点击刷新重试。"}`;if(error!==previousError)render();
   } finally {
     clearTimeout(timeout);
-    if (generation === contentGeneration && contentRequests.get(requestKey) === request) {
-      pending.delete(key); contentRequests.delete(requestKey);
-      const visible = route();
-      const sameRoute = isThread ? visible.name === "thread" && routeKey(visible.projectId, visible.threadId) === key : visible.name === "tasks" && (visible.id || selectedIdentity || (people()[0] && personIdentity(people()[0]))) === key;
-      if (sameRoute && (changed || (firstLoad && !background))) render();
-    }
+    if(sequence===contentSequence){loading=false;contentLoading=false;const button=document.querySelector(".refresh");if(button){button.disabled=false;button.textContent="刷新";}}
   }
 }
-// Partial reads must never turn a missing row into a deletion. Only a complete
-// generation replaces the old snapshot; each cumulative batch overlays by identity.
-function mergeSnapshot(previous, incoming) {
-  if (!previous) return incoming;
-  const projects = new Map(M.array(previous.projects).map(project => [project.id, project]));
-  for (const project of incoming.projects) {
-    const threads = new Map(M.array(projects.get(project.id)?.threads).map(thread => [thread.thread_id, thread]));
-    for (const thread of M.array(project.threads)) threads.set(thread.thread_id, thread);
-    projects.set(project.id, { ...project, threads: M.sortThreads([...threads.values()]) });
-  }
-  const collaborators = new Map(M.array(previous.collaborators).map(person => [personIdentity(person), person]));
-  for (const person of M.array(incoming.collaborators)) {
-    const old = collaborators.get(personIdentity(person));
-    const threads = new Map(M.array(old?.threads).map(thread => [routeKey(thread.project_id, thread.thread_id), thread]));
-    for (const thread of M.array(person.threads)) threads.set(routeKey(thread.project_id, thread.thread_id), thread);
-    const union = (left, right, key) => [...new Map([...M.array(left), ...M.array(right)].map(item => [key(item), item])).values()];
-    collaborators.set(personIdentity(person), { ...person,
-      actor_type: old?.actor_type === "human" ? "human" : person.actor_type,
-      aliases: union(old?.aliases, person.aliases, alias => routeKey(alias.project_id, alias.agent)),
-      projects: union(old?.projects, person.projects, project => project.id),
-      tools: union(old?.tools, person.tools, tool => tool),
-      threads: M.sortThreads([...threads.values()]) });
-  }
-  return { ...incoming, projects: [...projects.values()], collaborators: [...collaborators.values()] };
-}
-// Delta pages contain disjoint threads. Accumulate one fresh generation without
-// retransmitting/reprojecting every earlier thread on every server request.
-function appendSnapshotBatch(previous, batch) {
-  if (!previous) return batch;
-  const combined = mergeSnapshot(previous, batch);
-  const oldPeople = new Map(M.array(previous.collaborators).map(person => [personIdentity(person), person]));
-  const newPeople = new Map(M.array(batch.collaborators).map(person => [personIdentity(person), person]));
-  combined.collaborators = combined.collaborators.map(person => {
-    const old = oldPeople.get(personIdentity(person)), added = newPeople.get(personIdentity(person));
-    return old && added ? { ...person, pending: (old.pending || 0) + (added.pending || 0), turns: (old.turns || 0) + (added.turns || 0), last_at: [old.last_at || "", added.last_at || ""].sort().pop() } : person;
-  }).sort((a, b) => (b.pending || 0) - (a.pending || 0) || (personIdentity(a) < personIdentity(b) ? -1 : personIdentity(a) > personIdentity(b) ? 1 : 0));
-  const before = previous.overview || {}, added = batch.overview || {};
-  const byTime = (a, b) => (a.created_at || "") < (b.created_at || "") ? -1 : (a.created_at || "") > (b.created_at || "") ? 1 : 0;
-  combined.overview = {
-    projects: combined.projects.length,
-    threads: combined.projects.reduce((count, project) => count + M.array(project.threads).length, 0),
-    collaborators: combined.collaborators.length,
-    pending: (before.pending || 0) + (added.pending || 0),
-    attention: [...M.array(before.attention), ...M.array(added.attention)].sort(byTime),
-    recent: [...M.array(before.recent), ...M.array(added.recent)].sort((a, b) => byTime(b, a)).slice(0, 12),
-  };
-  return combined;
-}
-function invalidateRouteRead(kind, key) {
-  const requestKey = JSON.stringify([kind, key]);
-  const request = contentRequests.get(requestKey);
-  if (request) { request.controller.abort(); contentRequests.delete(requestKey); }
-  (kind === "thread" ? detailPending : taskPending).delete(key);
-  (kind === "thread" ? detailDirty : taskDirty).add(key);
-}
-function pruneSnapshot(base, sync) {
-  const projects = new Set(sync.project_ids);
-  const removed = new Set(sync.removed.map(item => routeKey(item.project_id, item.thread_id)));
-  return { ...base, projects: base.projects.filter(project => projects.has(project.id)).map(project => ({ ...project,
-    threads: M.array(project.threads).filter(thread => !removed.has(routeKey(project.id, thread.thread_id))),
-  })) };
-}
-async function load({ background = false, reason = "refresh" } = {}) {
-  if (document.hidden || contentSuspended) return;
-  // Navigation shares an in-flight scan; it only changes which route detail is needed.
-  if (reason === "navigation" && contentLoading) { render(); return ensureRouteData({ background: true }); }
-  contentLoading = true; clearTimeout(contentPaintTimer); contentPaintTimer = null;
-  const sequence = ++contentSequence;
-  contentController?.abort(); cancelContentRequests();
-  const controller = new AbortController(); contentController = controller;
-  const previous = snapshot;
-  loading = !background;
-  if (!background) render();
-  let changed = false, routeRead = null, accumulated = null, syncPlan = null;
-  let lastBatchRender = 0, lastPaintedLoaded = 0;
-  const requestedRoutes = new Set();
-  const valid = () => sequence === contentSequence && !controller.signal.aborted;
-  const paintBatch = () => {
-    if (!valid()) return;
-    contentPaintTimer = null;
-    render(); lastBatchRender = Date.now(); lastPaintedLoaded = snapshotProgress?.loaded || 0;
-  };
-  try {
-    let url = `/api/snapshot?${new URLSearchParams({ progressive: "1", async: "1", ...(completedVersion ? { since: completedVersion } : {}) })}`;
-    const cursors = new Set();
-    while (url) {
-      // Each batch has its own deadline: a large scan may legitimately need
-      // longer than one minute overall while continuing to make progress.
-      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-      let payload;
-      try { payload = await getJSON(url, controller.signal); }
-      finally { clearTimeout(timeout); }
-      if (!valid()) return;
-      if (!payload || !Array.isArray(payload.projects)) throw new Error("返回的项目数据格式无效");
-      const { progress, sync, ...content } = payload;
-      if (progress && (typeof progress.complete !== "boolean" || !Number.isInteger(progress.loaded) || !Number.isInteger(progress.total) || progress.loaded < 0 || progress.total < progress.loaded || (!progress.complete && (typeof progress.cursor !== "string" || !progress.cursor || cursors.has(progress.cursor))))) throw new Error("返回的分批读取进度无效");
-      const partial = progress && !progress.complete;
-      if (sync) {
-        if (!syncPlan) {
-          if (typeof sync.reset !== "boolean" || !Array.isArray(sync.changed) || !Array.isArray(sync.removed) || !Array.isArray(sync.project_ids) || (!sync.reset && (!completedSnapshot || sync.base_version !== completedVersion))) throw new Error("返回的增量基线无效，请刷新重试");
-          syncPlan = sync;
-          accumulated = sync.reset ? null : pruneSnapshot(completedSnapshot, sync);
-          const affected = [...sync.changed, ...sync.removed];
-          const dirtyThreads = new Set(affected.map(item => routeKey(item.project_id, item.thread_id)));
-          if (sync.reset) for (const key of [...details.keys(), ...detailPending]) dirtyThreads.add(key);
-          // A detail request begun before this change set was known cannot clear
-          // the new invalidation when its old response eventually arrives.
-          for (const key of dirtyThreads) invalidateRouteRead("thread", key);
-          const metadata = value => JSON.stringify(M.array(value?.projects).map(({ threads, ...project }) => project));
-          if (sync.reset || affected.length || metadata(completedSnapshot) !== metadata(content)) {
-            for (const key of new Set([...tasks.keys(), ...taskPending])) invalidateRouteRead("tasks", key);
-          }
-        }
-        accumulated = mergeSnapshot(accumulated, content);
-        if (!partial) {
-          if (typeof sync.version !== "string" || !sync.version || !sync.summary || !Array.isArray(sync.summary.collaborators) || !sync.summary.overview) throw new Error("返回的增量完成状态无效");
-          accumulated = { ...accumulated, ...sync.summary };
-        }
-      } else {
-        accumulated = progress?.delta ? appendSnapshotBatch(accumulated, content) : content;
-      }
-      const next = partial ? mergeSnapshot(previous, accumulated) : accumulated;
-      const nextProgress = partial ? progress : null;
-      changed = contentSignature(snapshot) !== contentSignature(next) || !!error || JSON.stringify(snapshotProgress) !== JSON.stringify(nextProgress);
-      snapshot = next; snapshotProgress = nextProgress; error = "";
-      if (!partial) {
-        completedSnapshot = next; completedVersion = sync?.version || null;
-        const remaining = new Set(next.projects.flatMap(project => M.array(project.threads).map(thread => routeKey(project.id, thread.thread_id))));
-        for (const key of details.keys()) if (!remaining.has(key)) { details.delete(key); detailErrors.delete(key); detailDirty.delete(key); }
-      }
-      // Bound DOM rebuild frequency for fast local pages, but paint the first
-      // real records immediately and always paint the final result.
-      if (changed && (!partial || !lastBatchRender || (!lastPaintedLoaded && progress.loaded) || Date.now() - lastBatchRender >= 100)) {
-        clearTimeout(contentPaintTimer); paintBatch();
-      } else if (changed && !contentPaintTimer) {
-        // A following network read may stall: still show already received rows
-        // at the trailing edge rather than waiting for the next response.
-        contentPaintTimer = setTimeout(paintBatch, Math.max(0, 100 - (Date.now() - lastBatchRender)));
-      }
-      // The current conversation need not wait for unrelated projects to scan.
-      const current = route(), identity = current.id || selectedIdentity || (people()[0] && personIdentity(people()[0]));
-      const routeReadKey = current.name === "thread" ? JSON.stringify(["thread", current.projectId, current.threadId]) : current.name === "tasks" && identity ? JSON.stringify(["tasks", identity]) : null;
-      if (routeReadKey && !requestedRoutes.has(routeReadKey)) {
-        requestedRoutes.add(routeReadKey);
-        routeRead = ensureRouteData({ force: !sync, background });
-      }
-      if (!partial) break;
-      cursors.add(progress.cursor);
-      url = `/api/snapshot?${new URLSearchParams({ cursor: progress.cursor, async: "1" })}`;
-    }
-  } catch (exc) {
-    if (sequence !== contentSequence) return;
-    const message = `${exc.name === "AbortError" ? "读取超时" : exc.message || "无法读取协作数据"}。保留已加载记录；已加载记录可能不是最新状态。`;
-    changed = error !== message; error = message;
-  } finally {
-    if (sequence === contentSequence) {
-      clearTimeout(contentPaintTimer); contentPaintTimer = null;
-      loading = false; contentLoading = false;
-      if (changed || !background) render();
-      else {
-        const stamp = document.querySelector(".snapshot-time"); if (stamp && snapshot) stamp.textContent = `更新于 ${formatTime(snapshot.generated_at)}`;
-        const refresh = document.querySelector(".refresh"); if (refresh) { refresh.disabled = false; refresh.textContent = "刷新"; }
-      }
-      await (routeRead || ensureRouteData({ background }));
-    }
-  }
-}
-
 function pauseContent() {
-  if (contentLoading) error = "读取已暂停。已加载记录可能不是最新状态，请刷新重试。";
-  contentLoading = false; clearTimeout(contentPaintTimer); contentPaintTimer = null; contentSequence += 1; contentController?.abort(); cancelContentRequests(); loading = false;
+  contentSequence+=1;contentController?.abort();contentLoading=false;loading=false;
 }
 function paintActivity() {
   window.AutoUI?.paintActivity();
@@ -710,7 +585,17 @@ async function pollActivity() {
   const controller = activityController;
   const timeout = setTimeout(() => controller.abort(), 6000);
   try {
-    const payload = await getJSON("/api/activity", controller.signal);
+    const scope = new URLSearchParams();
+    const current=route();
+    let visibleProjects=[];
+    if(["threads","project"].includes(current.name))visibleProjects=M.array(snapshot?.projects).filter(project=>M.array(project.threads).length).map(project=>project.id);
+    else if(current.name==="person")visibleProjects=M.array(people().find(person=>personIdentity(person)===current.id)?.threads).map(thread=>thread.project_id);
+    else if(current.name==="tasks")visibleProjects=M.array(tasks.get(current.id || selectedIdentity || (people()[0] && personIdentity(people()[0])))?.items).map(item=>item.project_id);
+    else if(["thread","auto"].includes(current.name))visibleProjects=[current.projectId];
+    else if(current.name==="people")visibleProjects=M.array(snapshot?.projects).map(project=>project.id);
+    for (const id of new Set(visibleProjects.filter(Boolean))) scope.append("project_id",id);
+    if (!scope.toString()) { activity = {runs:[]}; activityError=""; return; }
+    const payload = await getJSON(`/api/activity?${scope}`, controller.signal);
     if (sequence !== activitySequence) return;
     if (!payload || !Array.isArray(payload.runs)) throw new Error("执行观测格式无效");
     activity = payload; activityError = "";
@@ -722,7 +607,7 @@ async function pollActivity() {
   }
 }
 window.AutoUI?.configure({h,avatar,render,route,findProject,messageNode,uniqueHistory,runningMessages,threadHref,identityFor:(projectId,agent)=>{const person=people().find(p=>M.array(p.aliases).some(a=>a.project_id===projectId&&a.agent===agent));return person?personIdentity(person):agent;}});
-window.addEventListener("hashchange", () => { window.AutoUI?.navigate(route()); messageFilter = "all"; mobileThreads = false; render(); load({ background: true, reason: "navigation" }); });
+window.addEventListener("hashchange", () => { window.AutoUI?.navigate(route()); messageFilter = "all"; mobileThreads = false; load({ background: true, reason: "navigation" }); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(activityTimer); activitySequence += 1; activityController?.abort(); pauseContent(); } else { render(); pollActivity(); } });
 window.addEventListener("pagehide", () => { contentSuspended = true; pauseContent(); clearTimeout(activityTimer); clearTimeout(expiryTimer); activitySequence += 1; activityController?.abort(); });
 window.addEventListener("pageshow", event => { if (event.persisted) { contentSuspended = false; render(); pollActivity(); } });

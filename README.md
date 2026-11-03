@@ -430,3 +430,5 @@ remain pending explicit application against the captured baseline. Tests use fak
 See [setup, safety and current limitations](references/automatic-collaboration.md).
 
 Read recovery: snapshot jobs are bounded and shared across aborted requests. Startup verifies the running source fingerprint instead of silently reusing an older server. See [version checks, timeout recovery, and the multi-project scale test](references/ui-read-recovery.md).
+
+For the page-scoped UI, 20-row pagination and cache-first loading, see [UI page loading](references/ui-page-loading.md).

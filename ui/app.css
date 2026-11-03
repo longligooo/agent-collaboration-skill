@@ -264,3 +264,5 @@ select { background: var(--raised); border: 1px solid #485d41; border-radius: 5p
 @media(max-width:660px){.auto-form .provider-status{grid-template-columns:1fr}.auto-project-entry{flex-wrap:wrap}.auto-page .messages.auto-messages{height:auto!important;max-height:none;overflow-y:visible!important}.auto-page .auto-task-head h2{font-size:20px}.auto-context .auto-fields{display:grid}.auto-page .auto-toolbar>.auto-help{margin-left:0}.auto-context{padding:18px}.auto-page .chat-head .participants{flex-wrap:wrap}.auto-task-head{gap:8px}}
 
 .auto-export{margin:12px 0;min-width:0;overflow-wrap:anywhere}.auto-export summary{cursor:pointer;padding:6px 0}.auto-export pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;background:#171e19;padding:10px;border-radius:5px}.auto-export details{margin:8px 0}.auto-export summary:focus-visible{outline:2px solid #c8ef9b;outline-offset:2px}
+
+.pagination { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 20px 0; flex-wrap: wrap; }

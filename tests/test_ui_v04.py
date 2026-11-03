@@ -53,7 +53,7 @@ function matches(node,selector){
 const root=new FakeNode('div');root.setAttribute('id','app');
 const documentMock={hidden:false,activeElement:null,createElement:tag=>new FakeNode(tag),createElementNS:(_,tag)=>new FakeNode(tag),createTextNode:value=>new FakeNode('#text',value),createDocumentFragment:()=>new FakeNode('#fragment'),querySelector:selector=>selector==='#app'?root:root.querySelector(selector),querySelectorAll:selector=>root.querySelectorAll(selector),listeners:{},addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);},dispatch(name,event={}){for(const fn of this.listeners[name]||[])fn(event);}};
 const timers=[];
-const context=vm.createContext({window:{CollabUI:M,listeners:{},addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);},dispatch(name,event={}){for(const fn of this.listeners[name]||[])fn(event);}},document:documentMock,Node:FakeNode,location:{hash:'#/'},localStorage:{getItem(){return null;},setItem(){}},setTimeout(fn,delay){timers.push({fn,delay});return timers.length;},clearTimeout(id){if(timers[id-1])timers[id-1].cleared=true;},AbortController,URLSearchParams,fetch(){throw new Error('Unexpected test network request');},assert,walk,root,timers});
+const context=vm.createContext({window:{CollabUI:M,listeners:{},addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);},dispatch(name,event={}){for(const fn of this.listeners[name]||[])fn(event);}},document:documentMock,Node:FakeNode,location:{hash:'#/',origin:'http://localhost:23451',pathname:'/'},localStorage:{data:new Map(),get length(){return this.data.size;},key(i){return [...this.data.keys()][i]??null;},getItem(k){return this.data.get(k)??null;},setItem(k,v){this.data.set(k,String(v));},removeItem(k){this.data.delete(k);}},setTimeout(fn,delay){timers.push({fn,delay});return timers.length;},clearTimeout(id){if(timers[id-1])timers[id-1].cleared=true;},AbortController,URLSearchParams,fetch(){throw new Error('Unexpected test network request');},assert,walk,root,timers});
 let appSource=fs.readFileSync(MODEL_PATH.replace(/view-model\.js$/,'app.js'),'utf8');
 appSource=appSource.replace(/\nload\(\);\s*\npollActivity\(\);\s*$/,'');
 vm.runInContext(appSource,context);
@@ -162,16 +162,16 @@ assert(document.querySelectorAll('.avatar[data-avatar-id]').every(n=>!n.classLis
 const make=id=>({project_id:'p',project_name:'project',thread_id:id,topic:id,objective:'goal',participants:['agent'],coordinator:null,signals:[],turns:[],history:[]});
 snapshot={projects:[{id:'p',name:'project',available:true,threads:[make('first'),make('second')]}],collaborators:[],overview:{}};
 const waiting=[];fetch=url=>new Promise(resolve=>waiting.push({url,resolve}));
-location.hash='#/threads/p/first';const first=ensureRouteData();
-location.hash='#/threads/p/second';const second=ensureRouteData();
-waiting[1].resolve({ok:true,json:async()=>({thread:{...make('second'),topic:'SECOND_CURRENT'}})});
+location.hash='#/threads/p/first';const first=load();
+location.hash='#/threads/p/second';const second=load();
+waiting[1].resolve({ok:true,json:async()=>({schema_version:1,view:'thread',projects:[{id:'p',threads:[make('second')]}],collaborators:[],detail:{...make('second'),topic:'SECOND_CURRENT'}})});
 await second;
 assert(root.textContent.includes('SECOND_CURRENT'));
-waiting[0].resolve({ok:true,json:async()=>({thread:{...make('first'),topic:'FIRST_LATE'}})});
+waiting[0].resolve({ok:true,json:async()=>({schema_version:1,view:'thread',projects:[{id:'p',threads:[make('first')]}],collaborators:[],detail:{...make('first'),topic:'FIRST_LATE'}})});
 await first;
 assert(root.textContent.includes('SECOND_CURRENT'));
 assert(!root.textContent.includes('FIRST_LATE'));
-assert.equal(details.get(routeKey('p','first')).topic,'FIRST_LATE');
+assert.equal(details.has(routeKey('p','first')),false);
 })();
 """)
 
@@ -181,8 +181,8 @@ assert.equal(details.get(routeKey('p','first')).topic,'FIRST_LATE');
 const thread={project_id:'p',project_name:'project',thread_id:'t',topic:'topic',participants:['agent'],signals:[],turns:[]};
 snapshot={projects:[{id:'p',name:'project',available:true,threads:[thread]}],collaborators:[],overview:{}};
 let resolve;fetch=()=>new Promise(done=>{resolve=done;});
-location.hash='#/threads/p/t';const pending=ensureRouteData();
-contentGeneration+=1;details.clear();detailPending.clear();
+location.hash='#/threads/p/t';const pending=load();
+pauseContent();details.clear();
 resolve({ok:true,json:async()=>({thread:{...thread,topic:'STALE_DETAIL'}})});
 await pending;
 assert.equal(details.has(routeKey('p','t')),false);
@@ -192,7 +192,7 @@ assert.equal(details.has(routeKey('p','t')),false);
     def test_activity_poll_ignores_late_results_and_clears_on_error(self):
         self.run_dom("""
 (async()=>{
-snapshot={projects:[],collaborators:[],overview:{}};
+snapshot={projects:[{id:"p"}],collaborators:[],overview:{}};location.hash="#/people";
 const pending=[];fetch=url=>new Promise(resolve=>pending.push(resolve));
 const one=pollActivity(),two=pollActivity();
 const run=id=>({run_id:id,identity:id,active:true,status:'running',expires_at:'2099-01-01T00:00:00Z'});
