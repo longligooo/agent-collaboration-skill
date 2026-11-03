@@ -837,6 +837,8 @@ class CollaborationHandler(BaseHTTPRequestHandler):
                     "pid": os.getpid(),
                     "build": getattr(self.server, "build_info", None),
                     "automatic_enabled": gateway is not None,
+                    "automatic_token_required": gateway.credentials.token_required if gateway else None,
+                    "automatic_token_source": ("log" if os.environ.get("COLLAB_UI_BACKGROUND_LOG") else "terminal") if gateway and gateway.credentials.token_required else "disabled",
                     "registry_path": str(registry_path()),
                     "projects": [item["root"] for item in registry["projects"]],
                 },
@@ -1052,10 +1054,10 @@ def make_server(port: int, *, auto_service=None, auto_credentials=None) -> Threa
         raise collab.CollaborationError(f"cannot listen on 127.0.0.1:{port}: {exc}") from exc
 
 
-def serve(port: int, *, automatic: bool = True) -> None:
+def serve(port: int, *, automatic: bool = True, token_required: bool = True) -> None:
     if automatic:
         import auto_service
-        auto_service.serve(port, require_session_resume=True)
+        auto_service.serve(port, require_session_resume=True, token_required=token_required)
         return
     httpd = make_server(port)
     try:
@@ -1066,7 +1068,7 @@ def serve(port: int, *, automatic: bool = True) -> None:
         httpd.server_close()
 
 
-def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dict[str, Any]:
+def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True, token_required: bool = True) -> Dict[str, Any]:
     """Start the UI when needed. An existing UI only receives this project registration."""
     home = ui_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -1085,6 +1087,8 @@ def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dic
                     raise collab.CollaborationError(f"UI process {existing.get('pid')} uses a different service mode. Stop it and rerun this command.")
                 if existing.get("registry_path") != str(registry_path()):
                     raise collab.CollaborationError("UI uses a different registry home; use another port or stop the existing UI")
+                if automatic and existing.get("automatic_token_required", True) != token_required:
+                    raise collab.CollaborationError("UI token authentication mode differs; stop it and restart with the desired flag")
                 registered = register_project(root)
                 return {
                     **registered,
@@ -1092,7 +1096,8 @@ def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dic
                     "url": f"http://127.0.0.1:{port}/",
                     "pid": existing.get("pid"),
                     "automatic_enabled": existing.get("automatic_enabled", False),
-                    "token_log": str(home / "ui.log") if automatic else None,
+                    "token_source": existing.get("automatic_token_source"),
+                    "token_log": str(home / "ui.log") if automatic and token_required and existing.get("automatic_token_source") == "log" else None,
                 }
             log_path = home / "ui.log"
             fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -1101,11 +1106,11 @@ def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dic
             log_handle = os.fdopen(fd, "a", encoding="utf-8")
             try:
                 process = subprocess.Popen(
-                    [sys.executable, str(collab.SCRIPT_PATH), "ui", "--serve", "--port", str(port), "--root", str(root)] + ([] if automatic else ["--read-only"]),
+                    [sys.executable, str(collab.SCRIPT_PATH), "ui", "--serve", "--port", str(port), "--root", str(root)] + ([] if automatic else ["--read-only"]) + ([] if token_required else ["--no-token"]),
                     stdin=subprocess.DEVNULL,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
-                    env={**os.environ, "COLLAB_UI_HOME": str(home)},
+                    env={**os.environ, "COLLAB_UI_HOME": str(home), "COLLAB_UI_BACKGROUND_LOG": "1"},
                     **background_popen_kwargs(),
                 )
             finally:
@@ -1119,7 +1124,7 @@ def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dic
                         )
                     existing = read_health(port)
                     if existing:
-                        if existing.get("pid") != process.pid or existing.get("automatic_enabled") != automatic or existing.get("registry_path") != str(registry_path()):
+                        if existing.get("pid") != process.pid or (automatic and existing.get("automatic_token_required", True) != token_required) or existing.get("automatic_enabled") != automatic or existing.get("registry_path") != str(registry_path()):
                             raise collab.CollaborationError("another process answered during UI startup")
                         verify_running_ui(existing)
                         registered = register_project(root)
@@ -1128,8 +1133,9 @@ def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dic
                             "started": True,
                             "url": f"http://127.0.0.1:{port}/",
                             "pid": existing.get("pid"),
-                        "automatic_enabled": existing.get("automatic_enabled", False),
-                        "token_log": str(home / "ui.log") if automatic else None,
+                            "automatic_enabled": existing.get("automatic_enabled", False),
+                            "token_source": existing.get("automatic_token_source"),
+                            "token_log": str(home / "ui.log") if automatic and token_required and existing.get("automatic_token_source") == "log" else None,
                         }
                     time.sleep(0.1)
                 process.terminate()

@@ -228,7 +228,7 @@ class AutoService:
         raise auto_api.ApiError('not_found', 'not found', 404)
 
 
-def serve(port=23451, max_workers=2, *, require_session_resume=False):
+def serve(port=23451, max_workers=2, *, require_session_resume=False, token_required=True):
     """Host the WebUI and automatic API in one loopback process."""
     import hashlib
     import signal
@@ -239,7 +239,7 @@ def serve(port=23451, max_workers=2, *, require_session_resume=False):
     from auto_workspace import WorkspaceManager
     manager = WorkspaceManager(ui_server.ui_home() / 'automatic-workspaces')
     service = AutoService(providers, workspace_manager=manager, require_session_resume=require_session_resume)
-    credentials = auto_api.Credentials()
+    credentials = auto_api.Credentials(token_required=token_required)
     server = ui_server.make_server(port, auto_service=service, auto_credentials=credentials)
 
     def stores():
@@ -272,7 +272,10 @@ def serve(port=23451, max_workers=2, *, require_session_resume=False):
     if threading.current_thread() is threading.main_thread() and hasattr(signal, 'SIGTERM'):
         previous_signal = signal.signal(signal.SIGTERM, interrupted)
     print(f'Automatic collaboration: http://127.0.0.1:{port}/', flush=True)
-    print('Local access token (paste only into this local UI): ' + credentials.token, flush=True)
+    if token_required:
+        print('Local access token (paste only into this local UI): ' + credentials.token, flush=True)
+    else:
+        print('Token authentication disabled: trusted local processes can access automatic collaboration. Loopback and browser request protections remain enabled.', flush=True)
     print('Keep this terminal open. No projects are created; provider discovery is explicit.', flush=True)
     try:
         supervisor.start()
@@ -295,8 +298,9 @@ def main(argv=None):
     parser.add_argument("command", choices=["serve"])
     parser.add_argument("--port", type=int, default=23452)
     parser.add_argument("--max-workers", type=int, default=2, choices=range(1, 5))
+    parser.add_argument("--no-token", action="store_true", help="disable token authentication for trusted loopback-only use")
     args = parser.parse_args(argv)
-    return serve(args.port, args.max_workers)
+    return serve(args.port, args.max_workers, token_required=not args.no_token)
 
 
 if __name__ == '__main__':

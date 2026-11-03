@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 import secrets
@@ -30,7 +31,8 @@ class ApiError(ValueError):
 
 class Credentials:
     """Memory-only owner credentials. Persistence/bootstrap belongs to local CLI."""
-    def __init__(self, token=None, csrf=None):
+    def __init__(self, token=None, csrf=None, *, token_required=True):
+        self.token_required = bool(token_required)
         self.token = token or secrets.token_urlsafe(32)
         self.csrf = csrf or secrets.token_urlsafe(32)
         if not isinstance(self.token, str) or len(self.token) < 32:
@@ -72,8 +74,23 @@ class Gateway:
         # ownership. Browser mutations additionally require a separate CSRF key.
         auth = self._header(headers, 'Authorization', required=False)
         expected = 'Bearer ' + self.credentials.token
-        if auth is None or not hmac.compare_digest(auth.encode(), expected.encode()):
+        if self.credentials.token_required and (auth is None or not hmac.compare_digest(auth.encode(), expected.encode())):
             raise ApiError('unauthorized', 'local authentication required', 401)
+        if not self.credentials.token_required:
+            if any(name.lower() == 'forwarded' or name.lower().startswith('x-forwarded-')
+                   for name in headers.keys()):
+                raise ApiError('proxy_forbidden', 'forwarded requests require token authentication', 403)
+            # Disabling ownership authentication is local-process trust, not
+            # permission for remote peers or ambient cross-site browser requests.
+            try:
+                local = all(ipaddress.ip_address(address).is_loopback for address in
+                            (handler.server.server_address[0], handler.client_address[0]))
+            except (ValueError, AttributeError):
+                local = False
+            if not local:
+                raise ApiError('loopback_required', 'no-token mode requires loopback bind and peer', 403)
+            if self._header(headers, 'X-Collab-Local', required=False) != '1':
+                raise ApiError('local_header', 'explicit local request header required', 403)
         if handler.command != 'GET':
             csrf = self._header(headers, 'X-Collab-CSRF', required=False)
             if csrf is None or not hmac.compare_digest(csrf.encode(), self.credentials.csrf.encode()):

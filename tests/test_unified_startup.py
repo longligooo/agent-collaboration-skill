@@ -16,7 +16,7 @@ class UnifiedStartupTests(unittest.TestCase):
     def test_ui_default_delegates_and_read_only_opt_out(self):
         with patch('auto_service.serve') as automatic:
             ui_server.serve(23451)
-            automatic.assert_called_once_with(23451, require_session_resume=True)
+            automatic.assert_called_once_with(23451, require_session_resume=True, token_required=True)
         server = Mock()
         server.serve_forever.side_effect = KeyboardInterrupt
         with patch('ui_server.make_server', return_value=server), patch('auto_service.serve') as automatic:
@@ -60,7 +60,7 @@ class UnifiedStartupTests(unittest.TestCase):
     def test_explicit_auto_entry_preserves_default(self):
         with patch('auto_service.serve') as run:
             auto_service.main(['serve','--port','23999','--max-workers','3'])
-            run.assert_called_once_with(23999,3)
+            run.assert_called_once_with(23999,3, token_required=True)
 
 class UnifiedIntegrationTests(unittest.TestCase):
     def test_foreground_auth_reuse_modes_conflicts_and_shutdown(self):
@@ -91,6 +91,8 @@ class UnifiedIntegrationTests(unittest.TestCase):
                 result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=10)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertFalse(json.loads(result.stdout)['started'])
+                self.assertEqual(json.loads(result.stdout)['token_source'],'terminal')
+                self.assertIsNone(json.loads(result.stdout)['token_log'])
                 mismatch=subprocess.run(command+['--read-only'],env=env,capture_output=True,text=True,timeout=10)
                 self.assertNotEqual(mismatch.returncode,0)
                 other=dict(env,COLLAB_UI_HOME=str(Path(tmp)/'other'))

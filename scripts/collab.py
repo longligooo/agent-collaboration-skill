@@ -1477,10 +1477,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     if args.serve:
         ui_server.register_project(repository_root(args.root))
-        ui_server.serve(args.port, automatic=not args.read_only)
+        ui_server.serve(args.port, automatic=not args.read_only, token_required=not args.no_token)
         return 0
     root = repository_root(args.root)
-    emit(ui_server.ensure_ui(root, args.port, automatic=not args.read_only))
+    emit(ui_server.ensure_ui(root, args.port, automatic=not args.read_only, token_required=not args.no_token))
     return 0
 
 
@@ -1607,6 +1607,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui_parser.add_argument("--root", default=".")
     ui_parser.add_argument("--port", type=int, default=ui_server_port())
     ui_parser.add_argument("--serve", action="store_true", help="run the server in the foreground")
+    ui_parser.add_argument("--no-token", action="store_true", help="disable token authentication for trusted loopback-only use")
     ui_parser.add_argument("--read-only", action="store_true", help="disable automatic collaboration service")
     ui_parser.set_defaults(handler=cmd_ui)
     if __name__ == "__main__":

@@ -41,10 +41,30 @@ class GatewayTests(unittest.TestCase):
                 h[k] = v
         results = []
         handler = SimpleNamespace(headers=h, server=SimpleNamespace(server_address=('127.0.0.1',23451)),
-            command=method, path=path or self.path, rfile=io.BytesIO(body.encode()),
+            client_address=("127.0.0.1",12345), command=method, path=path or self.path, rfile=io.BytesIO(body.encode()),
             respond=lambda *args: results.append(args), close_connection=False)
         self.assertTrue(self.gateway.handle(handler))
         return results[0]
+
+
+    def test_no_token_remains_local_explicit_and_csrf_protected(self):
+        self.gateway.credentials.token_required = False
+        headers = {'Authorization': None, 'X-Collab-Local': '1'}
+        self.assertEqual(self.request('GET', auto_api.PREFIX+'/session', headers=headers)[0], 200)
+        self.assertEqual(self.request(headers=headers)[0], 201)
+        for bad in ({'Host':'evil.example:23451'}, {'Origin':'null'},
+                    {'Origin':'https://evil.example'}, {'Sec-Fetch-Site':'cross-site'},
+                    {'X-Collab-Local':None}, {'X-Collab-CSRF':None}):
+            self.assertEqual(self.request(headers={**headers, **bad})[0],403)
+
+    def test_no_token_rejects_non_loopback_bind_or_peer(self):
+        self.gateway.credentials.token_required = False
+        for bind, peer in [('0.0.0.0','127.0.0.1'), ('127.0.0.1','192.168.1.10')]:
+            headers=Message(); headers['Host']='127.0.0.1:23451'; headers['X-Collab-Local']='1'
+            handler=SimpleNamespace(headers=headers, command='GET', client_address=(peer,1234),
+                                    server=SimpleNamespace(server_address=(bind,23451)))
+            with self.assertRaises(auto_api.ApiError) as error: self.gateway.authorize(handler)
+            self.assertEqual(error.exception.code,'loopback_required')
 
     def test_valid_registry_dispatch(self):
         self.assertEqual(self.request()[0], 201)
