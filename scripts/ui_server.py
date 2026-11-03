@@ -22,6 +22,8 @@ from urllib.parse import parse_qs
 
 import collab
 import ui_read_model
+import read_budget
+import snapshot_jobs
 
 UI_PORT = 23451
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
@@ -129,6 +131,7 @@ def scan_thread(root: Path, thread_id: str, project: Dict[str, Any]) -> Dict[str
     turns: List[Dict[str, Any]] = []
     if turns_dir.is_dir():
         for path in sorted(turns_dir.glob("round-*.md")):
+            read_budget.check()
             try:
                 safe_path = collab.resolve_repo_path(root, collab.relative_path(root, path), must_exist=True, label="turn document")
                 metadata, body = collab.parse_turn(safe_path)
@@ -382,6 +385,7 @@ def metadata_fingerprint(root: Path, relative: str, *, exclude=()) -> str:
     target access, bound link chains/cycles, and never read source/private bodies.
     ctime/inode detect restored-mtime rewrites and atomic replacements.
     """
+    read_budget.check()
     root = root.resolve()
     if Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise collab.CollaborationError("invalid fingerprint path")
@@ -394,6 +398,7 @@ def metadata_fingerprint(root: Path, relative: str, *, exclude=()) -> str:
             cursor = root
             restarted = False
             for index, component in enumerate(parts):
+                read_budget.check()
                 cursor = cursor / component
                 try:
                     info = cursor.lstat()
@@ -420,6 +425,7 @@ def metadata_fingerprint(root: Path, relative: str, *, exclude=()) -> str:
                 return cursor
 
     def visit(path: Path):
+        read_budget.check()
         target = local_target(path)
         if target is None or target in visited:
             return
@@ -451,16 +457,17 @@ def project_code_fingerprint(root: Path) -> str:
     Git membership matters even without content changes (e.g. force-adding an
     ignored file). Read-only ls-files/rev-parse also handle linked worktrees.
     """
-    listing = subprocess.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    listing = read_budget.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if listing.returncode:
         if (root / ".git").exists():
             raise collab.CollaborationError("Git could not enumerate source metadata")
         return metadata_fingerprint(root, ".", exclude={".git", ".ai-collab", "__pycache__"})
-    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+    head = read_budget.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     values = [head.stdout.decode("ascii", errors="replace").strip()]
     for name in sorted({os.fsdecode(value) for value in listing.stdout.split(b"\0") if value}):
+        read_budget.check()
         if name.split("/", 1)[0] in {".git", ".ai-collab"}:
             continue
         target, linked = root, False
@@ -532,6 +539,7 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
             registry = load_registry(registry_file)
             projects, configs = [], {}
             for entry in registry["projects"]:
+                read_budget.check()
                 root = Path(entry["root"])
                 before_config = project_config_fingerprint(root)
                 project = project_shell(entry)
@@ -605,6 +613,7 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
             start = time.monotonic()
             stop = min(len(session["work"]), session["offset"] + SNAPSHOT_BATCH_SIZE)
             while session["offset"] < stop:
+                read_budget.check()
                 project, thread_id = session["work"][session["offset"]]
                 root, key = Path(project["root"]), (project["id"], thread_id)
                 if project_config_fingerprint(root) != session["configs"][project["id"]]:
@@ -614,6 +623,7 @@ def progressive_snapshot(cursor: Optional[str] = None, path: Optional[Path] = No
                 task_dependencies = {"coding_task": collab.read_json(task_path, "task fingerprint")} if task_path.is_file() else None
                 before = thread_fingerprint(root, thread_id, project, session["codes"][project["id"]], task_dependencies)
                 record = scan_thread(root, thread_id, project)
+                read_budget.check()
                 after = thread_fingerprint(root, thread_id, project, session["codes"][project["id"]], task_dependencies)
                 if before != after or record.get("error") or record.get("projection_error") or record.get("history_errors") or any(turn.get("error") for turn in record.get("turns", [])):
                     session["failed"] = True
@@ -734,6 +744,37 @@ def background_popen_kwargs() -> Dict[str, Any]:
     return {"start_new_session": True}
 
 
+def ui_build_info() -> Dict[str, Any]:
+    """Fingerprint executable UI sources, including dirty/uncommitted installs."""
+    root = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    files = sorted((root / "scripts").rglob("*.py")) + sorted((root / "ui").glob("*"))
+    for path in files:
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=2, check=False)
+        revision = result.stdout.decode("ascii", errors="replace").strip() if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        revision = None
+    return {"source_root": str(root), "source_fingerprint": digest.hexdigest(), "commit": revision}
+
+
+def verify_running_ui(existing: Dict[str, Any]) -> None:
+    running = existing.get("build") or {}
+    expected = ui_build_info()
+    if running.get("source_fingerprint") != expected["source_fingerprint"]:
+        raise collab.CollaborationError(
+            f"UI process {existing.get('pid', 'unknown')} uses older or different code "
+            f"(source: {running.get('source_root', 'unknown')}). Stop that UI process and rerun this command; "
+            "updating Git or reopening the browser does not restart the server.")
+
+
 def health_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/api/health"
 
@@ -794,6 +835,7 @@ class CollaborationHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "port": self.server.server_address[1],
                     "pid": os.getpid(),
+                    "build": getattr(self.server, "build_info", None),
                     "projects": [item["root"] for item in registry["projects"]],
                 },
             )
@@ -801,6 +843,36 @@ class CollaborationHandler(BaseHTTPRequestHandler):
         if path == "/api/snapshot":
             try:
                 query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+                asynchronous = query.pop("async", None)
+                if asynchronous is not None and asynchronous != ["1"]:
+                    raise SnapshotRequestError("invalid async mode", 400)
+                jobs = getattr(self.server, "snapshot_jobs", None)
+                if set(query) == {"job"} and len(query["job"]) == 1:
+                    token = query["job"][0]
+                    if not re.fullmatch(r"[0-9a-f]{32}", token) or jobs is None:
+                        raise SnapshotRequestError("invalid snapshot job", 400)
+                    status, payload = jobs.poll(token)
+                    self.respond(status, {**payload, "port": self.server.server_address[1]})
+                    return
+                if asynchronous:
+                    if query.get("progressive") == ["1"] and set(query) <= {"progressive", "since"} and ("since" not in query or len(query["since"]) == 1):
+                        since = query.get("since", [None])[0]
+                        if since is not None and not re.fullmatch(r"[0-9a-f]{32}", since):
+                            raise SnapshotRequestError("invalid snapshot version", 400)
+                        origin = registry_path()
+                        key = (str(origin.resolve()), "initial", since)
+                        operation = lambda: progressive_snapshot(path=origin, since=since)
+                    elif set(query) == {"cursor"} and len(query["cursor"]) == 1 and re.fullmatch(r"[0-9a-f]{32}:[0-9]{1,12}", query["cursor"][0]):
+                        cursor = query["cursor"][0]
+                        key = ("cursor", cursor)
+                        operation = lambda: progressive_snapshot(cursor)
+                    else:
+                        raise SnapshotRequestError("invalid async snapshot query", 400)
+                    if jobs is None:
+                        raise SnapshotRequestError("async snapshot service unavailable", 503)
+                    status, payload = jobs.fast_reply(*jobs.submit(key, operation))
+                    self.respond(status, {**payload, "port": self.server.server_address[1]})
+                    return
                 if not query:
                     payload = snapshot()
                 elif query.get("progressive") == ["1"] and set(query) <= {"progressive", "since"} and ("since" not in query or len(query["since"]) == 1):
@@ -939,6 +1011,8 @@ def make_server(port: int, *, auto_service=None, auto_credentials=None) -> Threa
         raise collab.CollaborationError(f"port must be between 1 and 65535; received {port}")
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), CollaborationHandler)
+        server.snapshot_jobs = snapshot_jobs.SnapshotJobs()
+        server.build_info = ui_build_info()
         if auto_service is not None:
             import auto_api
             if auto_credentials is None:
@@ -966,6 +1040,7 @@ def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
     home.mkdir(parents=True, exist_ok=True)
     existing = read_health(port)
     if existing:
+        verify_running_ui(existing)
         registered = post_json(port, "/api/register", {"root": str(root)})
         return {**registered, "started": False, "url": f"http://127.0.0.1:{port}/", "pid": existing.get("pid")}
 
@@ -979,6 +1054,7 @@ def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
         try:
             existing = read_health(port)
             if existing:
+                verify_running_ui(existing)
                 registered = post_json(port, "/api/register", {"root": str(root)})
                 return {
                     **registered,

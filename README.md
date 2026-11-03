@@ -428,3 +428,5 @@ explicitly deferred. Workers use isolated snapshots of current Git-project conte
 work. Sensitive/ignored exclusions are disclosed, originals stay untouched, and results
 remain pending explicit application against the captured baseline. Tests use fake providers, not real models.
 See [setup, safety and current limitations](references/automatic-collaboration.md).
+
+Read recovery: snapshot jobs are bounded and shared across aborted requests. Startup verifies the running source fingerprint instead of silently reusing an older server. See [version checks, timeout recovery, and the multi-project scale test](references/ui-read-recovery.md).

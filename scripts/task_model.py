@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import collab
+import read_budget
 
 SCHEMA_VERSION = 1
 PHASES = {"planned", "implementing", "verifying", "reviewing", "blocked"}
@@ -61,6 +62,7 @@ def _file_digest(path: Path) -> str:
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                read_budget.check()
                 digest.update(chunk)
         return digest.hexdigest()
     except OSError as exc:
@@ -71,16 +73,17 @@ def code_version(root: Path) -> Dict[str, Any]:
     """Read HEAD and actual tracked/untracked content; never invoke a shell."""
     root = root.resolve()
     try:
-        listing = subprocess.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        listing = read_budget.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if listing.returncode == 0:
             names = set(os.fsdecode(p) for p in listing.stdout.split(b"\0") if p)
-            head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            head = read_budget.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
             head_sha = head.stdout.decode("ascii").strip() if head.returncode == 0 else None
         else:
             if (root / ".git").exists():
                 raise collab.CollaborationError("Git could not enumerate this worktree; refusing an incomplete fingerprint")
             names = set()
             for directory, dirs, files in os.walk(root, followlinks=False):
+                read_budget.check()
                 dirs[:] = [d for d in dirs if d not in {".git", ".ai-collab", "__pycache__"}]
                 for name in list(dirs):
                     if (Path(directory) / name).is_symlink():
@@ -93,6 +96,7 @@ def code_version(root: Path) -> Dict[str, Any]:
         raise collab.CollaborationError(f"cannot inspect code version: {exc}") from exc
     entries = []
     for name in sorted(names):
+        read_budget.check()
         if name.split("/", 1)[0] in {".git", ".ai-collab"}:
             continue
         path = root / name
@@ -111,6 +115,7 @@ def capture_context(root: Path, thread_id: str) -> Dict[str, Any]:
     messages = []
     for directory in ("turns", "signals", "human-events"):
         for path in sorted((thread / directory).glob("*")):
+            read_budget.check()
             if path.is_file() and not path.name.startswith("."):
                 messages.append([directory + "/" + path.name, _file_digest(path)])
     local_relative = f".ai-collab/local/human-events/{thread_id}"

@@ -421,13 +421,44 @@ function render() {
   restoreView(savedView);
   paintActivity();
 }
+function snapshotAbortError() {
+  const error = new Error("Snapshot request aborted"); error.name = "AbortError"; return error;
+}
+function waitForSnapshot(delay, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(snapshotAbortError()); return; }
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(snapshotAbortError()); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
 async function getJSON(url, signal) {
-  const response = await fetch(url, { cache: "no-store", signal });
-  if (!response.ok) {
-    const snapshotErrors = { 409: "本次增量读取未完成，请点击刷新重试", 410: "分批读取游标已过期，请点击刷新重试", 413: "记录超过增量缓存容量，需减少读取范围或调整服务端容量", 503: "读取繁忙，请稍后点击刷新重试" };
-    throw new Error(url.startsWith("/api/snapshot") && snapshotErrors[response.status] || `读取失败（${response.status}）`);
+  const isSnapshot = url.startsWith("/api/snapshot?") || url === "/api/snapshot";
+  let job = null, polls = 0;
+  while (true) {
+    if (signal?.aborted) throw snapshotAbortError();
+    const response = await fetch(url, { cache: "no-store", signal });
+    if (signal?.aborted) throw snapshotAbortError();
+    if (!response.ok) {
+      const snapshotErrors = { 409: "本次增量读取未完成，请点击刷新重试", 410: "分批读取游标已过期，请点击刷新重试", 413: "记录超过增量缓存容量，需减少读取范围或调整服务端容量", 503: "读取繁忙，请稍后点击刷新重试", 504: "读取超时，请检查项目路径或 Git 是否响应后重试" };
+      const codes = { snapshot_timeout: snapshotErrors[504], snapshot_busy: "后台仍在读取项目，请稍候再刷新；反复刷新不会加快读取", snapshot_expired: "本次读取结果已过期，请点击刷新重试" };
+      let failure = null;
+      if (isSnapshot) { try { failure = await response.json(); } catch (_) { /* Older servers may not return JSON. */ } }
+      throw new Error(isSnapshot && (codes[failure?.error_code] || snapshotErrors[response.status]) || `读取失败（${response.status}）`);
+    }
+    const payload = await response.json();
+    if (signal?.aborted) throw snapshotAbortError();
+    if (!isSnapshot || response.status !== 202) return payload;
+    // One logical batch keeps the caller's original deadline and abort signal.
+    // Poll only the issued same-origin job, never a server-supplied URL.
+    if (!payload || payload.pending !== true || typeof payload.job_id !== "string" || !/^[0-9a-f]{32}$/.test(payload.job_id) || (job && job !== payload.job_id) || ++polls > 600) {
+      throw new Error("返回的后台读取状态无效，请点击刷新重试");
+    }
+    job = payload.job_id;
+    const delay = typeof payload.retry_after_ms === "number" && Number.isFinite(payload.retry_after_ms) ? Math.max(100, Math.min(1000, payload.retry_after_ms)) : 100;
+    await waitForSnapshot(delay, signal);
+    url = `/api/snapshot?${new URLSearchParams({ job })}`;
   }
-  return response.json();
 }
 function contentSignature(payload) {
   // Server sampling time alone must not remount an unchanged conversation.
@@ -566,7 +597,7 @@ async function load({ background = false, reason = "refresh" } = {}) {
     render(); lastBatchRender = Date.now(); lastPaintedLoaded = snapshotProgress?.loaded || 0;
   };
   try {
-    let url = `/api/snapshot?${new URLSearchParams({ progressive: "1", ...(completedVersion ? { since: completedVersion } : {}) })}`;
+    let url = `/api/snapshot?${new URLSearchParams({ progressive: "1", async: "1", ...(completedVersion ? { since: completedVersion } : {}) })}`;
     const cursors = new Set();
     while (url) {
       // Each batch has its own deadline: a large scan may legitimately need
@@ -631,7 +662,7 @@ async function load({ background = false, reason = "refresh" } = {}) {
       }
       if (!partial) break;
       cursors.add(progress.cursor);
-      url = `/api/snapshot?${new URLSearchParams({ cursor: progress.cursor })}`;
+      url = `/api/snapshot?${new URLSearchParams({ cursor: progress.cursor, async: "1" })}`;
     }
   } catch (exc) {
     if (sequence !== contentSequence) return;
