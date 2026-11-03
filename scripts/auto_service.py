@@ -6,6 +6,7 @@ only through the authenticated opt-in auto_api gateway, never the legacy API.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -16,7 +17,10 @@ from auto_store import AutoStore
 
 
 class AutoService:
-    def __init__(self, providers, *, store_factory=AutoStore, supervisor=None, workspace_manager=None):
+    def __init__(self, providers, *, store_factory=AutoStore, supervisor=None, workspace_manager=None, require_session_resume=False):
+        self.require_session_resume = require_session_resume
+        self._enabled_tasks = set()
+        self._session_id = uuid.uuid4().hex
         self.providers = providers
         self.store_factory = store_factory
         self.supervisor = supervisor
@@ -31,6 +35,18 @@ class AutoService:
             if key not in self._stores:
                 self._stores[key] = self.store_factory(root, project_id)
             return self._stores[key]
+
+    def task_enabled(self, store, task_id):
+        with self._lock:
+            return not self.require_session_resume or (str(store.root), task_id) in self._enabled_tasks
+
+    def store_enabled(self, store):
+        with self._lock:
+            return not self.require_session_resume or any(root == str(store.root) for root, _ in self._enabled_tasks)
+
+    def enable_task(self, store, task_id):
+        with self._lock:
+            self._enabled_tasks.add((str(store.root), task_id))
 
     @staticmethod
     def metadata_paths(store):
@@ -52,6 +68,7 @@ class AutoService:
 
     def _project(self, store, task, *, detail=False):
         result = dict(task)
+        result["runtime_requires_resume"] = task["state"] in {"planning", "awaiting_approval", "ready", "running", "blocked", "paused"} and not self.task_enabled(store, task["id"])
         result['execution_workspace'] = {'kind': 'managed_snapshot', 'supported': None, 'requires_clean': False}
         result['application'] = {'status': 'pending', 'automatic': False}
         if self.workspace_manager is not None:
@@ -160,8 +177,14 @@ class AutoService:
                 if isinstance(planned_tasks, list) and any(isinstance(t, dict) and t.get('participant_id') == current['coordinator']['participant_id'] for t in planned_tasks):
                     raise auto_api.ApiError('coordinator_read_only', 'implementation tasks require a worker', 422)
         if operation == 'create_task':
-            task = store.create_task(body['title'], body['instruction'], body['coordinator'], idempotency_key=key, guard=launch_guard)
+            created = []
+            def create_guard(current):
+                launch_guard(current)
+                created.append(current['id'])
+            task = store.create_task(body['title'], body['instruction'], body['coordinator'], idempotency_key=key, guard=create_guard)
             # Return the durable command result, not a race-dependent fresh task.
+            if created:
+                self.enable_task(store, task['id'])
             return {'task': task}
         if operation == 'list_tasks':
             values = store.list_tasks(after=params.get('cursor'), limit=100)
@@ -187,7 +210,15 @@ class AutoService:
         if operation == 'revise':
             return {'task': store.revise(task_id, **body, idempotency_key=key, guard=mutation_guard)}
         if operation in {'pause', 'resume', 'cancel'}:
-            return {'task': store.control(task_id, operation, **body, idempotency_key=key)}
+            current = store.get_task(task_id)
+            if operation == 'resume' and self.require_session_resume:
+                task = store.activate_session(task_id, self._session_id, expected_revision=body['expected_revision'], idempotency_key=key)
+                self.enable_task(store, task_id)
+                return {'task': task}
+            task = store.control(task_id, operation, **body, idempotency_key=key)
+            if operation == 'resume':
+                self.enable_task(store, task_id)
+            return {'task': task}
         if operation == 'retry':
             return store.retry(task_id, **body, idempotency_key=key)
         if operation == 'change_provider':
@@ -197,27 +228,19 @@ class AutoService:
         raise auto_api.ApiError('not_found', 'not found', 404)
 
 
-def main(argv=None):
-    """Explicit local service entry point; never started by a read request."""
-    import argparse
+def serve(port=23451, max_workers=2, *, require_session_resume=False):
+    """Host the WebUI and automatic API in one loopback process."""
     import hashlib
     import signal
-    import sys
     import ui_server
     from auto_providers import ProviderRegistry
     from auto_runtime import Supervisor
-
-    parser = argparse.ArgumentParser(description='Opt-in registered-project automatic collaboration service')
-    parser.add_argument('command', choices=['serve'])
-    parser.add_argument('--port', type=int, default=23452)
-    parser.add_argument('--max-workers', type=int, default=2, choices=range(1, 5))
-    args = parser.parse_args(argv)
     providers = ProviderRegistry()
     from auto_workspace import WorkspaceManager
     manager = WorkspaceManager(ui_server.ui_home() / 'automatic-workspaces')
-    service = AutoService(providers, workspace_manager=manager)
+    service = AutoService(providers, workspace_manager=manager, require_session_resume=require_session_resume)
     credentials = auto_api.Credentials()
-    server = ui_server.make_server(args.port, auto_service=service, auto_credentials=credentials)
+    server = ui_server.make_server(port, auto_service=service, auto_credentials=credentials)
 
     def stores():
         result = []
@@ -239,15 +262,16 @@ def main(argv=None):
                 continue
         return result
 
-    supervisor = Supervisor(stores, providers, max_workers=args.max_workers, workspace_manager=manager)
+    supervisor = Supervisor(stores, providers, max_workers=max_workers, workspace_manager=manager, task_enabled=service.task_enabled, store_enabled=service.store_enabled)
     service.supervisor = supervisor
     # No implicit probe: the UI owner explicitly refreshes capabilities. The
     # initial task may block until discovery; old queues are still durable.
     def interrupted(signum, frame):
         raise KeyboardInterrupt
-    if hasattr(signal, 'SIGTERM'):
-        signal.signal(signal.SIGTERM, interrupted)
-    print(f'Automatic collaboration: http://127.0.0.1:{args.port}/', flush=True)
+    previous_signal = None
+    if threading.current_thread() is threading.main_thread() and hasattr(signal, 'SIGTERM'):
+        previous_signal = signal.signal(signal.SIGTERM, interrupted)
+    print(f'Automatic collaboration: http://127.0.0.1:{port}/', flush=True)
     print('Local access token (paste only into this local UI): ' + credentials.token, flush=True)
     print('Keep this terminal open. No projects are created; provider discovery is explicit.', flush=True)
     try:
@@ -256,9 +280,23 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     finally:
-        supervisor.stop()
-        server.server_close()
+        try:
+            supervisor.stop()
+        finally:
+            server.server_close()
+            if previous_signal is not None:
+                signal.signal(signal.SIGTERM, previous_signal)
     return 0
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="Unified local collaboration service")
+    parser.add_argument("command", choices=["serve"])
+    parser.add_argument("--port", type=int, default=23452)
+    parser.add_argument("--max-workers", type=int, default=2, choices=range(1, 5))
+    args = parser.parse_args(argv)
+    return serve(args.port, args.max_workers)
 
 
 if __name__ == '__main__':

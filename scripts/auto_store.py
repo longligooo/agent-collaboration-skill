@@ -390,7 +390,7 @@ class AutoStore:
             return job
         return self._write("enqueue:" + task_id, idempotency_key, [participant_id, kind, payload], action)
 
-    def claim(self, owner, *, lease_seconds=60):
+    def claim(self, owner, *, lease_seconds=60, task_enabled=None):
         text(owner, "owner", 200)
         if type(lease_seconds) not in (int, float) or not 1 <= lease_seconds <= 3600:
             fail("invalid", "invalid lease")
@@ -400,7 +400,10 @@ class AutoStore:
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('claimed','unknown') LIMIT 1").fetchone():
                 return None
             for row in db.execute("SELECT data FROM jobs WHERE state='queued' ORDER BY seq"):
-                job = json.loads(row[0]); task = self._task(db, job["task_id"])
+                job = json.loads(row[0])
+                if task_enabled is not None and not task_enabled(job["task_id"]):
+                    continue
+                task = self._task(db, job["task_id"])
                 if job["kind"] == "planning":
                     allowed = task["state"] == "planning"
                 elif job["kind"] == "message":
@@ -613,6 +616,26 @@ class AutoStore:
             self._event(db, task_id, action + "_requested")
             return self._save_task(db, task)
         return self._write("control:" + task_id, idempotency_key, [action, expected_revision], change)
+
+    def activate_session(self, task_id, session_id, *, expected_revision, idempotency_key):
+        """Explicitly enable one task for this service lifetime, replay-safe."""
+        self._require_key(idempotency_key)
+        def activate(db):
+            task = self._task(db, task_id)
+            self._expected(task, expected_revision)
+            if task['state'] == 'paused':
+                if self._active(db, task_id):
+                    fail('invalid_state', 'task is not safely paused')
+                task['state'] = task.pop('resume_state', 'ready')
+                self._event(db, task_id, 'resume_requested')
+                task = self._save_task(db, task)
+            elif task['state'] not in {'planning', 'awaiting_approval', 'ready', 'running', 'blocked'}:
+                fail('invalid_state', 'task cannot resume')
+            return {'session': session_id, 'task': task}
+        result = self._write('activate_session:' + task_id, idempotency_key, [expected_revision], activate)
+        if result['session'] != session_id:
+            fail('session_changed', 'service restarted; refresh and explicitly enable again')
+        return result['task']
 
     def mark_blocked(self, task_id, reason):
         identifier(reason, "blocked reason")

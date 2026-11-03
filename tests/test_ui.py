@@ -167,6 +167,11 @@ class UiTest(unittest.TestCase):
         self.pids.append(started["pid"])
         health = request_json(port, "/api/health")
         self.assertEqual(health["pid"], started["pid"])
+        self.assertTrue(health["automatic_enabled"])
+        self.assertNotIn("token", health)
+        self.assertTrue(Path(started["token_log"]).is_file())
+        if os.name != "nt":
+            self.assertEqual(Path(started["token_log"]).stat().st_mode & 0o777, 0o600)
         registered = self.run_cli("ui", "--root", str(second), "--port", str(port))
         self.assertFalse(registered["started"])
         self.assertEqual(request_json(port, "/api/health")["pid"], started["pid"])

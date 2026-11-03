@@ -836,6 +836,8 @@ class CollaborationHandler(BaseHTTPRequestHandler):
                     "port": self.server.server_address[1],
                     "pid": os.getpid(),
                     "build": getattr(self.server, "build_info", None),
+                    "automatic_enabled": gateway is not None,
+                    "registry_path": str(registry_path()),
                     "projects": [item["root"] for item in registry["projects"]],
                 },
             )
@@ -1050,7 +1052,11 @@ def make_server(port: int, *, auto_service=None, auto_credentials=None) -> Threa
         raise collab.CollaborationError(f"cannot listen on 127.0.0.1:{port}: {exc}") from exc
 
 
-def serve(port: int) -> None:
+def serve(port: int, *, automatic: bool = True) -> None:
+    if automatic:
+        import auto_service
+        auto_service.serve(port, require_session_resume=True)
+        return
     httpd = make_server(port)
     try:
         httpd.serve_forever()
@@ -1060,16 +1066,10 @@ def serve(port: int) -> None:
         httpd.server_close()
 
 
-def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
+def ensure_ui(root: Path, port: int = UI_PORT, *, automatic: bool = True) -> Dict[str, Any]:
     """Start the UI when needed. An existing UI only receives this project registration."""
     home = ui_home()
     home.mkdir(parents=True, exist_ok=True)
-    existing = read_health(port)
-    if existing:
-        verify_running_ui(existing)
-        registered = post_json(port, "/api/register", {"root": str(root)})
-        return {**registered, "started": False, "url": f"http://127.0.0.1:{port}/", "pid": existing.get("pid")}
-
     lock_path = home / "ui.lock"
     lock_path.touch(exist_ok=True)
     with lock_path.open("r+b") as lock:
@@ -1081,40 +1081,67 @@ def ensure_ui(root: Path, port: int = UI_PORT) -> Dict[str, Any]:
             existing = read_health(port)
             if existing:
                 verify_running_ui(existing)
-                registered = post_json(port, "/api/register", {"root": str(root)})
+                if existing.get("automatic_enabled", False) != automatic:
+                    raise collab.CollaborationError(f"UI process {existing.get('pid')} uses a different service mode. Stop it and rerun this command.")
+                if existing.get("registry_path") != str(registry_path()):
+                    raise collab.CollaborationError("UI uses a different registry home; use another port or stop the existing UI")
+                registered = register_project(root)
                 return {
                     **registered,
                     "started": False,
                     "url": f"http://127.0.0.1:{port}/",
                     "pid": existing.get("pid"),
+                    "automatic_enabled": existing.get("automatic_enabled", False),
+                    "token_log": str(home / "ui.log") if automatic else None,
                 }
-            log_handle = (home / "ui.log").open("a", encoding="utf-8")
-            process = subprocess.Popen(
-                [sys.executable, str(collab.SCRIPT_PATH), "ui", "--serve", "--port", str(port)],
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                env={**os.environ, "COLLAB_UI_HOME": str(home)},
-                **background_popen_kwargs(),
-            )
-            log_handle.close()
-            deadline = time.time() + 8
-            while time.time() < deadline:
-                if process.poll() is not None:
-                    raise collab.CollaborationError(
-                        f"web UI exited during startup; see {home / 'ui.log'}"
-                    )
-                existing = read_health(port)
-                if existing:
-                    registered = post_json(port, "/api/register", {"root": str(root)})
-                    return {
-                        **registered,
-                        "started": True,
-                        "url": f"http://127.0.0.1:{port}/",
-                        "pid": existing.get("pid"),
-                    }
-                time.sleep(0.1)
-            process.terminate()
-            raise collab.CollaborationError(f"web UI did not become ready; see {home / 'ui.log'}")
+            log_path = home / "ui.log"
+            fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            if os.name != "nt":
+                os.fchmod(fd, 0o600)
+            log_handle = os.fdopen(fd, "a", encoding="utf-8")
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, str(collab.SCRIPT_PATH), "ui", "--serve", "--port", str(port), "--root", str(root)] + ([] if automatic else ["--read-only"]),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ, "COLLAB_UI_HOME": str(home)},
+                    **background_popen_kwargs(),
+                )
+            finally:
+                log_handle.close()
+            try:
+                deadline = time.time() + 8
+                while time.time() < deadline:
+                    if process.poll() is not None:
+                        raise collab.CollaborationError(
+                            f"web UI exited during startup; see {home / 'ui.log'}"
+                        )
+                    existing = read_health(port)
+                    if existing:
+                        if existing.get("pid") != process.pid or existing.get("automatic_enabled") != automatic or existing.get("registry_path") != str(registry_path()):
+                            raise collab.CollaborationError("another process answered during UI startup")
+                        verify_running_ui(existing)
+                        registered = register_project(root)
+                        return {
+                            **registered,
+                            "started": True,
+                            "url": f"http://127.0.0.1:{port}/",
+                            "pid": existing.get("pid"),
+                        "automatic_enabled": existing.get("automatic_enabled", False),
+                        "token_log": str(home / "ui.log") if automatic else None,
+                        }
+                    time.sleep(0.1)
+                process.terminate()
+                raise collab.CollaborationError(f"web UI did not become ready; see {home / 'ui.log'}")
+            except BaseException:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                raise
         finally:
             unlock_file(lock)

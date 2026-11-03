@@ -297,13 +297,15 @@ class _RootLease:
 
 class Supervisor:
     def __init__(self, stores, providers, max_workers=2, *, job_timeout=300.0,
-                 max_output=1024 * 1024, poll_interval=.1, workspace_manager=None):
+                 max_output=1024 * 1024, poll_interval=.1, workspace_manager=None, task_enabled=None, store_enabled=None):
         if type(max_workers) is not int or not 1 <= max_workers <= 8:
             raise ValueError("max_workers must be 1..8")
         if not 0 < job_timeout <= 3600 or not 1024 <= max_output <= 4 * 1024 * 1024 or not .01 <= poll_interval <= 5:
             raise ValueError("invalid runtime bounds")
         if isinstance(providers, ProviderRegistry) and workspace_manager is None:
             raise ProviderError("managed_workspace_required")
+        self.store_enabled = store_enabled
+        self.task_enabled = task_enabled
         self.workspace_manager = workspace_manager
         self.stores, self.providers = stores, providers
         self.max_workers, self.job_timeout = max_workers, job_timeout
@@ -374,6 +376,8 @@ class Supervisor:
                 with self._lock:
                     if root in self._futures:
                         continue
+                if self.store_enabled and not self.store_enabled(store):
+                    continue
                 if root not in self._leases:
                     try:
                         self._leases[root] = _RootLease(store, self.owner)
@@ -391,7 +395,7 @@ class Supervisor:
                 if store.list_jobs(states=["unknown"], limit=1):
                     self._errors[root] = "process_unknown"
                     continue
-                job = store.claim(self.owner, lease_seconds=30)
+                job = store.claim(self.owner, lease_seconds=30, task_enabled=(lambda task_id: self.task_enabled(store, task_id)) if self.task_enabled else None)
                 if job is not None:
                     with self._lock:
                         self._futures[root] = self._executor.submit(self._cycle, store, job)
@@ -427,6 +431,8 @@ class Supervisor:
         tasks = store.list_tasks(after=self._cursors.get(root), limit=100)
         self._cursors[root] = tasks[-1]["id"] if len(tasks) == 100 else None
         for task in tasks:
+            if self.task_enabled and not self.task_enabled(store, task["id"]):
+                continue
             try:
                 if task["state"] == "planning":
                     # Pause can occur after the planner produced output. Keep it
