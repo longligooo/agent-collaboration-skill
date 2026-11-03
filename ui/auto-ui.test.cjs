@@ -95,3 +95,5 @@ test('disconnected UI can re-detect mode after service restart in either directi
 test('foreground token guidance never promises background log recovery',()=>{
  const x=harness(async()=>response({})),r={name:'auto',projectId:'p',taskId:''};const body=content(x.api.render(r));assert.match(body,/只有原服务是后台启动时才返回 token_log/);assert.match(body,/前台服务的 token 仍在原启动终端/);
 });
+
+test('custom Codex configuration is usable but not authenticated',()=>{const ready={id:'codex',installed:true,auth_status:'configured',headless_status:'available',planning_isolation:'provider_read_only_profile'};assert(A.available(ready));assert(!A.available({...ready,id:'claude',planning_isolation:'model_tools_denied'}));assert(!A.available({...ready,unavailable_reason:'auth_unconfirmed'}));assert(!A.available({...ready,capabilities_status:'stale'}));});

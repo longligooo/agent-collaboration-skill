@@ -8,6 +8,7 @@ hooks. Codex uses a verified app-server profile; unsupported capabilities fail c
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import queue
@@ -54,14 +55,14 @@ def _stop(process):
 
 
 class _Process:
-    """Bounded stdio transport; stderr is discarded, never exposed to clients."""
-    def __init__(self, argv, *, cwd, env, timeout, max_output):
+    """Bounded stdio; optional private stderr parsing, never exposed to clients."""
+    def __init__(self, argv, *, cwd, env, timeout, max_output, merge_stderr=False):
         self.deadline = time.monotonic() + timeout
         self.limit = max_output
         self.queue = queue.Queue(maxsize=64)
         self.stop = threading.Event()
         self.process = auto_process.spawn(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         self.writes = queue.Queue(1)
@@ -201,21 +202,23 @@ class ProviderRegistry:
         self._cache = None
         self._executables = {}
         self._sources = {}
+        self._env_signatures = {}
+        self._codex_provider_binding = None
         self._checked = 0.0
         self._lock = threading.Lock()
 
     def _env(self, provider=None):
-        # Do not inherit arbitrary runtime injection options (NODE_OPTIONS,
-        # PYTHONPATH, BASH_ENV, etc.). CLI credentials remain in its user store.
-        keys = ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "WINDIR", "TEMP", "TMP")
-        keys += {"codex": ("CODEX_HOME", "OPENAI_API_KEY"),
-                 "claude": ("CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
-                 "agy": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}.get(provider, ())
-        return {**{k: os.environ[k] for k in keys if k in os.environ}, "PATH": self.path,
-                "NO_COLOR": "1", "CI": "1"}
+        from .environment import cli_environment
+        return cli_environment(provider, self.path)
 
-    def _command(self, argv, cwd, provider):
-        proc = _Process(argv, cwd=cwd, env=self._env(provider), timeout=self.timeout, max_output=self.max_output)
+    def _env_signature(self, provider, env=None):
+        # Private binding only; never emit credentials or derived values in records.
+        from .environment import config_binding
+        env = self._env(provider) if env is None else env
+        return hashlib.sha256(json.dumps(env, sort_keys=True).encode() + config_binding(provider)).digest()
+
+    def _command(self, argv, cwd, provider, *, include_stderr=False):
+        proc = _Process(argv, cwd=cwd, env=self._env(provider), timeout=self.timeout, max_output=self.max_output, merge_stderr=include_stderr)
         try:
             proc.process.stdin.close()
             output = []
@@ -235,9 +238,11 @@ class ProviderRegistry:
 
     def _codex(self, executable, cwd, record):
         from .codex import CodexSession, fixed_startup_argv
-        session = CodexSession("planning", "", cwd, discovery_only=True)
+        env = self._env("codex")
+        session = CodexSession("planning", "", cwd, discovery_only=True,
+                               credential_env_names=[k for k, v in env.items() if v])
         proc = _Process(fixed_startup_argv(executable, "planning", cwd), cwd=cwd,
-                        env=self._env("codex"), timeout=self.timeout, max_output=self.max_output)
+                        env=env, timeout=self.timeout, max_output=self.max_output)
         try:
             for outgoing in session.start():
                 proc.send(outgoing)
@@ -258,9 +263,12 @@ class ProviderRegistry:
             record["auth_status"] = session.auth_status
             record["headless_status"] = "available"
             record["models"] = session.models
-            record["catalog_status"] = "fresh"
-            record["catalog_source"] = "codex.app-server.model/list"
-            record["unavailable_reason"] = None if session.auth_status == "authenticated" else "auth_unconfirmed"
+            self._codex_provider_binding = session.provider_binding
+            record["catalog_status"] = "unknown" if session.provider_binding else "fresh"
+            record["catalog_source"] = "codex.local_config" if session.provider_binding else "codex.app-server.model/list"
+            if session.provider_binding:
+                record["catalog_reason"] = "local_config_not_provider_verified"
+            record["unavailable_reason"] = None if session.auth_status in ("authenticated", "configured") else "auth_unconfirmed"
         finally:
             proc.close()
 
@@ -279,13 +287,21 @@ class ProviderRegistry:
         code, help_text = self._command((executable, "--help"), cwd, "claude")
         if code == 0 and "--print" in help_text and "--output-format" in help_text:
             record["headless_status"] = "available"
-        required = {"--bare", "--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config",
-                    "--disable-slash-commands", "--permission-prompts", "--permission-mode", "--no-session-persistence", "--max-turns",
+        required = {"--safe-mode", "--settings", "--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config",
+                    "--disable-slash-commands", "--permission-prompts", "--permission-mode", "--no-session-persistence",
                     "--restricted", "--output-format", "--permission-prompts"}
         if code == 0 and all(flag in help_text for flag in required):
             version_code, version_text = self._command((executable, "--version"), cwd, "claude")
             match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\s|$)", version_text.strip())
             if version_code == 0 and match and (2, 1, 301) <= tuple(map(int, match.groups())) < (2, 2, 0):
+                if "--max-turns" not in help_text:
+                    from .claude import verify_hidden_max_turns
+                    verify_hidden_max_turns(lambda args: self._command(
+                        (executable, *args), cwd, "claude", include_stderr=True))
+                auth_code, auth_output = self._command(
+                    (executable, "--safe-mode", "--restricted", "auth", "status"), cwd, "claude")
+                from .claude import parse_auth_status
+                record["auth_status"] = parse_auth_status(auth_code, auth_output)
                 record["planning_isolation"] = "model_tools_denied"
                 from .claude import sandbox_capability
                 reason = sandbox_capability(self.path, help_text)
@@ -294,8 +310,10 @@ class ProviderRegistry:
                 record["sandbox_startup_tested"] = False
                 record["managed_policy_trusted"] = True
                 record["unavailable_reason"] = None if record["auth_status"] == "authenticated" else "auth_unconfirmed"
-        record["catalog_source"] = "claude.agent-sdk.supportedModels"
-        record["catalog_reason"] = "sdk_discovery_not_available"
+        from .claude import configured_models
+        record["models"] = configured_models(self._env("claude"))
+        record["catalog_source"] = "claude.local_config" if record["models"] else "claude.agent-sdk.supportedModels"
+        record["catalog_reason"] = "local_config_not_provider_verified" if record["models"] else "sdk_discovery_not_available"
 
     def _agy(self, executable, cwd, record):
         code, help_text = self._command((executable, "--help"), cwd, "agy")
@@ -331,7 +349,11 @@ class ProviderRegistry:
                                 self._sources[provider] = (str(source), source.stat())
                                 resolved = self._resolve_executable(provider, source)
                                 self._executables[provider] = (str(resolved), resolved.stat())
+                                before = self._env_signature(provider)
                                 getattr(self, "_" + provider)(str(resolved), cwd, record)
+                                if before != self._env_signature(provider):
+                                    raise ProviderError("provider_configuration_changed")
+                                self._env_signatures[provider] = before
                             except (OSError, UnicodeError, ProviderError) as exc:
                                 record["probe_error"] = getattr(exc, "code", "probe_io_error")
                                 record["unavailable_reason"] = record["probe_error"]
@@ -362,6 +384,9 @@ class ProviderRegistry:
         if provider == "codex" and sys.platform == "win32":
             from .codex import resolve_executable
             return resolve_executable(candidate)
+        if provider == "claude" and sys.platform == "win32":
+            from .claude import resolve_executable
+            return resolve_executable(candidate)
         return Path(candidate).resolve()
 
     def build_launch(self, provider_id, model_id=None, *, phase="planning", prompt, cwd, protected_roots=()):
@@ -380,8 +405,14 @@ class ProviderRegistry:
             raise ProviderError("isolation_unverified")
         if time.monotonic() - self._checked > self.ttl:
             raise ProviderError("discovery_stale")
-        if record["auth_status"] != "authenticated":
+        if (record["auth_status"] != "authenticated"
+                and not (provider_id == "codex" and record["auth_status"] == "configured"
+                         and self._codex_provider_binding)):
             raise ProviderError("auth_unconfirmed")
+        launch_env = self._env(provider_id)
+        if (provider_id in self._env_signatures
+                and self._env_signature(provider_id, launch_env) != self._env_signatures[provider_id]):
+            raise ProviderError("provider_configuration_changed")
         executable, checked_stat = self._executables[provider_id]
         try:
             actual = Path(executable).stat()
@@ -404,8 +435,9 @@ class ProviderRegistry:
         if provider_id == "codex":
             from .codex import fixed_startup_argv
             return LaunchSpec(fixed_startup_argv(executable, phase, directory), prompt.encode("utf-8"),
-                              directory, self._env(provider_id), output_format="codex-app-server",
-                              transport={"phase": phase, "model_id": model_id})
+                              directory, launch_env, output_format="codex-app-server",
+                              transport={"phase": phase, "model_id": model_id,
+                                         "provider_binding": self._codex_provider_binding})
         # The trusted executable and managed policy are not sandboxed here.
         # These flags remove model-accessible execution/delegation/MCP tools.
         sandboxed = phase == "worker" and record.get("execution_status") == "sandbox_required"
@@ -417,17 +449,19 @@ class ProviderRegistry:
                   "Edit(./.codex)", "Edit(./.codex/**)") if phase == "worker" else ("*",)
         if sandboxed:
             denied = tuple(rule for rule in denied if rule != "Bash")
-        argv = (executable, "--bare", "--restricted", "--tools", tools,
+        argv = (executable, "--safe-mode", "--restricted", "--tools", tools,
                 "--disallowedTools", *denied, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                 "--disable-slash-commands", "--permission-prompts", "none", "--permission-mode", "acceptEdits" if phase == "worker" else "default",
                 "--no-session-persistence", "--max-turns", "8" if phase == "worker" else "1",
                 "--output-format", "json", "-p")
-        env = self._env(provider_id)
+        env = launch_env
         if sandboxed:
             from .claude import worker_settings
             settings = worker_settings(directory, protected_roots)
             argv += ("--settings", json.dumps(settings, separators=(",", ":")))
             env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
+        else:
+            argv += ("--settings", '{"disableAllHooks":true}')
         if model_id is not None:
             argv += ("--model", model_id)
         return LaunchSpec(argv, prompt.encode("utf-8"), directory, env)

@@ -267,6 +267,57 @@ class CodexTests(unittest.TestCase):
                 self.assertIsNotNone(s.error_code)
                 self.assertFalse(any(r.get('method') == 'thread/start' for r in f.sent))
 
+    def test_serialized_known_null_defaults_are_semantically_absent(self):
+        from auto_providers.codex import (PROFILE_NULL_DEFAULTS,
+            FILESYSTEM_NULL_DEFAULTS, NETWORK_NULL_DEFAULTS)
+        for phase in ('planning', 'worker'):
+            session = self.session(phase)
+            fixture = Fixture(session)
+            profile = fixture.config['permissions'][session.profile]
+            for target, fields in ((profile, PROFILE_NULL_DEFAULTS),
+                                   (profile['filesystem'], FILESYSTEM_NULL_DEFAULTS),
+                                   (profile['network'], NETWORK_NULL_DEFAULTS)):
+                target.update({key: None for key in fields})
+            original = copy.deepcopy(fixture.config)
+            verify_effective_config(fixture.config, phase, session.cwd)
+            self.assertEqual(fixture.config, original)  # no mutation of evidence
+            fixture.handshake()
+            self.assertIsNone(session.error_code)
+
+    def test_optional_defaults_never_permit_nonnull_or_unknown_fields(self):
+        from auto_providers.codex import (PROFILE_NULL_DEFAULTS,
+            FILESYSTEM_NULL_DEFAULTS, NETWORK_NULL_DEFAULTS)
+        for location, fields in ((None, PROFILE_NULL_DEFAULTS),
+                                 ('filesystem', FILESYSTEM_NULL_DEFAULTS),
+                                 ('network', NETWORK_NULL_DEFAULTS)):
+            for key in fields | {'future_unknown_field'}:
+                values = [None, False, 0, '', [], {}, True, 'parent'] if key == 'future_unknown_field' else [False, 0, '', [], {}, True, 'parent']
+                for value in values:
+                    with self.subTest(location=location, key=key, value=value):
+                        session = self.session()
+                        fixture = Fixture(session)
+                        profile = fixture.config['permissions'][session.profile]
+                        (profile if location is None else profile[location])[key] = value
+                        fixture.handshake()
+                        self.assertEqual(session.error_code, 'codex_effective_config_unverified')
+                        self.assertFalse(any(r.get('method') == 'thread/start' for r in fixture.sent))
+
+    def test_security_wire_types_are_strict(self):
+        for mutate in (
+            lambda config, profile: config['features'].update(hooks=0),
+            lambda config, profile: profile['network'].update(enabled=0),
+            lambda config, profile: profile['network'].update(enabled=True),
+            lambda config, profile: profile['filesystem'].update({'/extra': None}),
+            lambda config, profile: profile['filesystem'].update({'/extra': 'write'}),
+            lambda config, profile: profile['filesystem'].pop(':root'),
+        ):
+            session = self.session()
+            fixture = Fixture(session)
+            mutate(fixture.config, fixture.config['permissions'][session.profile])
+            fixture.handshake()
+            self.assertEqual(session.error_code, 'codex_effective_config_unverified')
+            self.assertFalse(session.delivered)
+
     def test_profile_broadened_by_merge_rejected(self):
         s = self.session('worker')
         f = Fixture(s)
@@ -308,6 +359,118 @@ class CodexTests(unittest.TestCase):
             f.handshake()
             self.assertEqual(s.error_code, 'auth_unconfirmed' if missing_auth else 'model_not_in_catalog')
             self.assertFalse(s.delivered)
+
+    def custom_fixture(self, *, discovery=True, model=None, binding=None, keys=('ROUTER_API_KEY',), provider=None):
+        session=self.session(discovery_only=discovery, model_id=model,
+            credential_env_names=keys, expected_provider_binding=binding)
+        fixture=Fixture(session)
+        fixture.config.update(model_provider='router', model='vendor/exact:free',
+            model_providers={'router': provider or {'base_url':'https://router.example/v1',
+                'env_key':'ROUTER_API_KEY', 'wire_api':'responses'}})
+        def response(method,result):
+            if method=='account/read':return {'account':None,'requiresOpenaiAuth':False}
+            if method=='thread/start':result.update(model=session.model_id,modelProvider='router')
+            return result
+        fixture.modify=response
+        return session,fixture
+
+    def test_custom_provider_configured_not_authenticated(self):
+        session,fixture=self.custom_fixture()
+        fixture.handshake()
+        self.assertIsNone(session.error_code)
+        self.assertEqual(session.auth_status,'configured')
+        self.assertEqual([m['id'] for m in session.models],['vendor/exact:free'])
+        self.assertNotIn('model-a',str(session.models))
+        self.assertFalse(any(r.get('method')=='thread/start' for r in fixture.sent))
+
+    def test_custom_default_model_preserved_and_no_fallback(self):
+        discovery,probe=self.custom_fixture();probe.handshake()
+        session,fixture=self.custom_fixture(discovery=False,binding=discovery.provider_binding)
+        fixture.handshake()
+        self.assertIsNone(session.error_code)
+        request=next(r for r in fixture.sent if r.get('method')=='thread/start')
+        self.assertEqual(request['params']['model'],'vendor/exact:free')
+        self.assertEqual(request['params']['modelProvider'],'router')
+        self.assertIs(request['params']['allowProviderModelFallback'],False)
+        self.assertTrue(session.delivered)
+
+    def test_custom_account_flag_strict_and_key_required(self):
+        for auth in ({'account':None}, {'account':None,'requiresOpenaiAuth':0},
+                     {'account':None,'requiresOpenaiAuth':None},
+                     {'account':{'type':'apiKey'},'requiresOpenaiAuth':False}):
+            session,fixture=self.custom_fixture()
+            fixture.modify=lambda method,result:auth if method=='account/read' else result
+            fixture.handshake()
+            self.assertEqual(session.auth_status,'unknown')
+        session,fixture=self.custom_fixture(keys=());fixture.handshake()
+        self.assertEqual(session.auth_status,'unknown')
+
+    def test_no_account_does_not_enable_builtin_provider(self):
+        session,fixture=self.custom_fixture()
+        fixture.config['model_provider']='openai'
+        fixture.handshake()
+        self.assertEqual(session.auth_status,'unknown')
+        self.assertIsNone(session.provider_binding)
+
+    def test_custom_helper_is_only_configured(self):
+        session,fixture=self.custom_fixture(keys=(),provider={
+            'base_url':'https://router.example/v1','auth':{'command':'/trusted/helper','args':[]}})
+        fixture.handshake();self.assertEqual(session.auth_status,'configured')
+        session,fixture=self.custom_fixture(keys=(),provider={
+            'base_url':'https://router.example/v1','auth':{'command':'','args':[]}})
+        fixture.handshake();self.assertEqual(session.auth_status,'unknown')
+
+    def test_custom_model_and_provider_response_must_match_before_turn(self):
+        discovery,probe=self.custom_fixture();probe.handshake()
+        for field,value in (('model','paid-fallback'),('modelProvider','other'),('model',None)):
+            session,fixture=self.custom_fixture(discovery=False,binding=discovery.provider_binding)
+            original=fixture.modify
+            def response(method,result):
+                result=original(method,result)
+                if method=='thread/start':result[field]=value
+                return result
+            fixture.modify=response;fixture.handshake()
+            self.assertEqual(session.error_code,'codex_thread_model_unverified')
+            self.assertFalse(any(r.get('method')=='turn/start' for r in fixture.sent))
+
+    def test_custom_model_cannot_select_bundled_or_other_model(self):
+        discovery,probe=self.custom_fixture();probe.handshake()
+        for model in ('model-a','vendor/other:paid'):
+            session,fixture=self.custom_fixture(discovery=False,model=model,binding=discovery.provider_binding)
+            fixture.handshake()
+            self.assertEqual(session.error_code,'model_not_in_catalog')
+            self.assertFalse(any(r.get('method')=='thread/start' for r in fixture.sent))
+
+    def test_custom_binding_required_and_configuration_change_rejected(self):
+        discovery,probe=self.custom_fixture();probe.handshake()
+        session,fixture=self.custom_fixture(discovery=False)
+        fixture.handshake();self.assertEqual(session.error_code,'codex_provider_configuration_unverified')
+        for change in ('endpoint','model','helper','provider'):
+            session,fixture=self.custom_fixture(discovery=False,binding=discovery.provider_binding)
+            if change=='endpoint':fixture.config['model_providers']['router']['base_url']='https://other.example'
+            if change=='model':fixture.config['model']='vendor/other'
+            if change=='helper':fixture.config['model_providers']['router']['auth']={'command':'/other/helper'}
+            if change=='provider':fixture.config['model_provider']='openai'
+            fixture.handshake();self.assertEqual(session.error_code,'codex_provider_configuration_changed')
+            self.assertFalse(any(r.get('method')=='thread/start' for r in fixture.sent))
+
+    def test_custom_missing_model_bad_endpoint_and_injection_key_fail_closed(self):
+        for change in ('model','endpoint','credential_key'):
+            session,fixture=self.custom_fixture(keys=('NODE_OPTIONS',))
+            if change=='model':fixture.config['model']=None
+            if change=='endpoint':fixture.config['model_providers']['router']['base_url']='https://secret@router.example'
+            if change=='credential_key':fixture.config['model_providers']['router']['env_key']='NODE_OPTIONS'
+            fixture.handshake()
+            self.assertNotEqual(session.auth_status,'configured')
+            if change!='credential_key':self.assertIsNotNone(session.error_code)
+
+    def test_telemetry_overrides_are_verified(self):
+        for key in ('analytics.enabled','otel.metrics_exporter','otel.exporter','otel.trace_exporter'):
+            config=effective('planning',self.root)
+            first,last=key.split('.')
+            config[first][last]=True if last=='enabled' else 'statsig'
+            with self.assertRaisesRegex(ProviderError,'codex_effective_config_unverified'):
+                verify_effective_config(config,'planning',self.root)
 
     def test_paginated_model_catalog(self):
         s = self.session(discovery_only=True)

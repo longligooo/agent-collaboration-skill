@@ -19,6 +19,7 @@ integration has NOT been tested; all tests use synthetic server responses.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -192,6 +193,11 @@ def config_overrides(phase, cwd):
     values = {"features." + key: False for key in DISABLED_FEATURES}
     values.update({
         "features.shell_tool": phase == "worker",
+        # Disable optional vendor/custom telemetry for supervised invocations.
+        "analytics.enabled": False,
+        "otel.metrics_exporter": "none",
+        "otel.exporter": "none",
+        "otel.trace_exporter": "none",
         # Required by Codex when a named permissions table is supplied.
         "default_permissions": name,
         "web_search": "disabled",
@@ -243,11 +249,54 @@ def _get(value, dotted):
     return value
 
 
+# Observed config/read serialization in Codex 0.166.0-alpha.1. These optional
+# fields are semantically absent ONLY when null. Do not recursively strip nulls:
+# unknown keys, non-null inheritance/proxy rules, and path grants must fail closed.
+PROFILE_NULL_DEFAULTS = frozenset(("description", "extends", "workspace_roots"))
+FILESYSTEM_NULL_DEFAULTS = frozenset(("glob_scan_max_depth",))
+NETWORK_NULL_DEFAULTS = frozenset((
+    "proxy_url", "enable_socks5", "socks_url", "enable_socks5_udp",
+    "allow_upstream_proxy", "dangerously_allow_non_loopback_proxy",
+    "dangerously_allow_all_unix_sockets", "mode", "domains", "unix_sockets",
+    "allow_local_binding", "mitm",
+))
+
+
+def _canonical_profile(profile):
+    if not isinstance(profile, dict):
+        return profile
+    value = copy.deepcopy(profile)
+    for target, allowed in ((value, PROFILE_NULL_DEFAULTS),
+                            (value.get("filesystem"), FILESYSTEM_NULL_DEFAULTS),
+                            (value.get("network"), NETWORK_NULL_DEFAULTS)):
+        if isinstance(target, dict):
+            for key in allowed:
+                if key in target and target[key] is None:
+                    del target[key]
+    return value
+
+
+def _exact_config(actual, expected):
+    # Python's False == 0 must not validate an unrecognized wire type.
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _exact_config(actual[key], value) for key, value in expected.items())
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _exact_config(a, b) for a, b in zip(actual, expected))
+    return actual == expected
+
+
 def verify_effective_config(config, phase, cwd):
     if not isinstance(config, dict):
         raise ProviderError("codex_effective_config_unverified")
     for key, expected in config_overrides(phase, cwd).items():
-        if _get(config, key) != expected:
+        actual = _get(config, key)
+        if key.startswith("permissions."):
+            actual = _canonical_profile(actual)
+        if not _exact_config(actual, expected):
             raise ProviderError("codex_effective_config_unverified")
     # An override of include_only must not leave alternative filters or injected
     # environment values from another config layer active.
@@ -283,7 +332,8 @@ class CodexSession:
     acknowledged, not that the model understood it. discovery_only never starts
     a thread or turn, and does not assert execution was account-tested.
     """
-    def __init__(self, phase, prompt, cwd, model_id=None, *, discovery_only=False):
+    def __init__(self, phase, prompt, cwd, model_id=None, *, discovery_only=False,
+                 credential_env_names=(), expected_provider_binding=None):
         self.cwd = _workspace(cwd)
         self.profile = profile_name(phase, self.cwd)
         if not isinstance(prompt, str) or (not prompt and not discovery_only) or len(prompt.encode()) > MAX_OUTPUT:
@@ -295,6 +345,12 @@ class CodexSession:
         self.done, self.delivered, self.output, self.error_code = False, False, "", None
         self.thread_id, self.turn_id = None, None
         self.auth_status = "unknown"
+        self._credential_env_names = frozenset(credential_env_names)
+        self._expected_provider_binding = expected_provider_binding
+        self.provider_binding = None
+        self._custom_provider = None
+        self._configured_model = None
+        self._credential_configured = False
         self.models = []
         self.capabilities = {"planning_isolation": "unverified", "execution_status": "blocked",
                              "actual_account_execution_tested": False}
@@ -308,6 +364,42 @@ class CodexSession:
         self._messages = {}
         self._size = 0
         self._notifications = 0
+
+    def _provider_config(self, config):
+        # Discovery runs in a fresh cwd: user/admin provider configuration is
+        # trusted. Bind the exact effective provider table before worker cwd
+        # configuration can change endpoint, auth helper or model selection.
+        provider_id = config.get("model_provider")
+        if provider_id in (None, "openai"):
+            if self._expected_provider_binding is not None:
+                raise ProviderError("codex_provider_configuration_changed")
+            return
+        providers = config.get("model_providers")
+        provider = providers.get(provider_id) if isinstance(provider_id, str) and isinstance(providers, dict) else None
+        model = config.get("model")
+        if (not isinstance(provider, dict) or not isinstance(provider.get("base_url"), str)
+                or not isinstance(model, str) or not MODEL_ID.fullmatch(model)):
+            raise ProviderError("codex_custom_provider_unverified")
+        from .environment import _url
+        _url(provider["base_url"])
+        self._custom_provider, self._configured_model = provider_id, model
+        self.provider_binding = hashlib.sha256(json.dumps(
+            [provider_id, model, provider], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if (self._expected_provider_binding is not None
+                and self.provider_binding != self._expected_provider_binding):
+            raise ProviderError("codex_provider_configuration_changed")
+        name, helper = provider.get("env_key"), provider.get("auth")
+        self._credential_configured = (
+            isinstance(name, str)
+            and re.fullmatch(r'(?:[A-Z][A-Z0-9_]{0,100}_)?(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|TOKEN)', name) is not None
+            and name in self._credential_env_names)
+        if isinstance(helper, dict):
+            # The trusted CLI owns execution. This is configured, NOT proof of
+            # helper success or remotely valid credentials.
+            self._credential_configured |= (isinstance(helper.get("command"), str)
+                and bool(helper["command"].strip())
+                and isinstance(helper.get("args", []), list)
+                and all(isinstance(v, str) for v in helper.get("args", [])))
 
     def _request(self, method, params):
         self._counter += 1
@@ -380,6 +472,7 @@ class CodexSession:
                 "includeLayers": False, "cwd": self.cwd})]
         if method == "config/read":
             verify_effective_config(result.get("config"), self.phase, self.cwd)
+            self._provider_config(result["config"])
             return [self._request("experimentalFeature/list", {"limit": 100})]
         if method == "experimentalFeature/list":
             for item in self._page(result):
@@ -414,7 +507,13 @@ class CodexSession:
             return [self._request("account/read", {"refreshToken": False})]
         if method == "account/read":
             account = result.get("account")
-            if isinstance(account, dict):
+            if self._custom_provider:
+                if (account is None and result.get("requiresOpenaiAuth") is False
+                        and self._credential_configured):
+                    self.auth_status = "configured"
+                elif result.get("requiresOpenaiAuth") is True:
+                    self.auth_status = "authenticated" if isinstance(account, dict) else "unauthenticated"
+            elif isinstance(account, dict):
                 self.auth_status = "authenticated"
             elif result.get("requiresOpenaiAuth") is True:
                 self.auth_status = "unauthenticated"
@@ -433,11 +532,20 @@ class CodexSession:
             next_page = self._paginate(method, result, {"limit": 100, "includeHidden": False})
             if next_page is not None:
                 return next_page
+            if self._custom_provider:
+                # Bundled OpenAI models are not this gateway's catalogue.
+                self.models = [{"id": self._configured_model,
+                    "label": self._configured_model + " · 本地配置，未验证"}]
             if self.discovery_only:
                 self.done = True
                 return []
-            if self.auth_status != "authenticated":
+            if self.auth_status not in ("authenticated", "configured"):
                 raise ProviderError("auth_unconfirmed")
+            if self._custom_provider:
+                if self._expected_provider_binding is None:
+                    raise ProviderError("codex_provider_configuration_unverified")
+                if self.model_id is None:
+                    self.model_id = self._configured_model
             if self.model_id and not any(m["id"] == self.model_id for m in self.models):
                 raise ProviderError("model_not_in_catalog")
             params = {"cwd": self.cwd, "permissions": self.profile, "approvalPolicy": "on-request",
@@ -445,6 +553,11 @@ class CodexSession:
                       "config": config_overrides(self.phase, self.cwd)}
             if self.model_id:
                 params["model"] = self.model_id
+            if self._custom_provider:
+                params["modelProvider"] = self._custom_provider
+                # Protocol default is false; explicit false is supported by the
+                # experimental API already required for named permissions.
+                params["allowProviderModelFallback"] = False
             return [self._request("thread/start", params)]
         if method == "thread/start":
             active = result.get("activePermissionProfile")
@@ -452,6 +565,9 @@ class CodexSession:
                     or result.get("cwd") != self.cwd or result.get("approvalPolicy") != "on-request"
                     or result.get("approvalsReviewer") != "user"):
                 raise ProviderError("codex_thread_policy_unverified")
+            if (self._custom_provider and
+                    (result.get("model") != self.model_id or result.get("modelProvider") != self._custom_provider)):
+                raise ProviderError("codex_thread_model_unverified")
             thread = result.get("thread")
             if not isinstance(thread, dict):
                 raise ProviderError("codex_invalid_thread")

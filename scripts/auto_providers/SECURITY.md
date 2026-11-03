@@ -3,7 +3,9 @@
 This package never runs a model in `discover`; GET-style `discover()` is cache-only.
 Explicit refresh performs bounded noninteractive probes from an empty temporary
 cwd, using a fixed argv and a filtered environment. Existing CLI account stores
-remain the provider's responsibility; this package does not open credential files.
+remain the provider's responsibility; this package does not open their auth/keychain
+stores. It reads bounded trusted user config to import allowlisted auth/routing
+settings into a private subprocess environment.
 Account responses are reduced to status, not identity, email, keys or raw stderr.
 Discovery may contact each provider's catalogue/auth services; it is not an offline
 check. It does not request login, import, onboarding, installs, or explicit token refresh.
@@ -26,7 +28,7 @@ rechecked before constructing a launch. A changed binary requires rediscovery.
 
 - Planning/coordinator: `--tools ""` and `--disallowedTools "*"` remove all model
   tools. This is not `--allowedTools []` (which only controls auto-approval).
-- All phases: bare/restricted mode, disabled slash commands, empty strict MCP
+- All phases: safe/restricted mode with fixed `disableAllHooks`, disabled slash commands, empty strict MCP
   configuration, no session persistence, finite turns, JSON output, and permission
   prompts set to `none`. No bypass or dangerous permission flags are accepted.
 - Workers use finite file tools; on supported Linux/macOS hosts with the documented
@@ -44,11 +46,17 @@ rechecked before constructing a launch. A changed binary requires rediscovery.
   additional working directories. This is a model-tool restriction, not a promise
   of arbitrary host isolation or immunity from administrator policy. A deployment
   requiring a stronger boundary must supply that boundary rather than remove flags.
-- Actual CLI/model integration remains untested: tests use executable fixtures.
+- Claude 2.1.317 was tested through an actual OpenRouter free-model synthetic
+  planning, two-worker file write/read and coordinator summary cycle in a managed
+  checkout. All four jobs succeeded; the runtime correctly stopped awaiting
+  verification and did not apply changes to the original project. The model
+  falsely claimed a trailing newline, illustrating why job success is not
+  acceptance. Native Windows execution and sandboxed Bash remain untested.
 
 Claude's SDK `supportedModels()`/initialization result is the documented catalogue
 surface, not an invented `claude models`. The stdlib-only adapter currently reports
-`catalog_status=unknown`, `catalog_reason=sdk_discovery_not_available`. Users can
+`catalog_status=unknown`; configured local model IDs are labeled unverified, or
+`catalog_reason=sdk_discovery_not_available` when none are configured. Users can
 choose provider default or a syntactically valid model, but availability is not
 promised. No SDK is installed or queried through a model call.
 
@@ -74,7 +82,7 @@ support is help-observed. Execution is deferred from v1 by the user; only Codex 
 ## Sources checked 2026-11-02
 
 - https://code.claude.com/docs/en/cli-reference (tools, disallowedTools wildcard,
-  bare/restricted, strict MCP, permission-prompts, output format)
+  safe/restricted, strict MCP, permission-prompts, output format)
 - https://code.claude.com/docs/en/permissions (working directories, resolved symlink
   checks, acceptEdits does not auto-approve outside-working-directory writes)
 - https://code.claude.com/docs/en/agent-sdk/typescript (supportedModels)
@@ -118,3 +126,14 @@ metadata, containment and PE architecture are checked; wrapper and native payloa
 identity/stat are revalidated before launch. Metadata is not code signing: the
 installed binary remains trusted. Unknown layouts fail with a specific resolver
 reason. Windows fixture paths/PE headers are synthetic, not native execution proof.
+
+
+Custom Codex provider state is `configured`, not `authenticated`, when the
+protocol explicitly says no OpenAI auth is required and a trusted credential
+source, endpoint and model are configured. The exact effective provider table
+and model are privately bound across discovery and execution. Only that configured
+model is eligible; bundled catalog models are not gateway entitlements. Provider
+fallback is explicitly false and thread-returned model/provider must match before
+a turn is sent. No remote credential-validity claim is made. Optional analytics
+and OTEL exporters are disabled and verified. Real Codex execution remains
+blocked by the test host's nested sandbox; no sandbox controls were weakened.

@@ -94,7 +94,7 @@ for line in sys.stdin:
 
     def test_claude_auth_no_invented_models(self):
         self.cli('claude', '''import sys,json
-if sys.argv[1:]==['auth','status']: print(json.dumps({'loggedIn':True,'email':'PRIVATE','authMethod':'oauth_token'}))
+if sys.argv[1:] in (['auth','status'],['--safe-mode','--restricted','auth','status']): print(json.dumps({'loggedIn':True,'email':'PRIVATE','authMethod':'oauth_token'}))
 elif sys.argv[1:]==['--help']: print('--print --output-format')
 else:raise RuntimeError('not a supported command')
 ''')
@@ -141,6 +141,19 @@ else:raise RuntimeError('unsupported command')
             self.assertNotIn('ANTHROPIC_API_KEY', registry._env('codex'))
             self.assertNotIn('OPENAI_API_KEY', registry._env('agy'))
 
+    def test_environment_change_requires_new_discovery(self):
+        self.modern_claude()
+        registry = self.registry()
+        registry.discover(refresh=True)
+        with patch.dict(os.environ, {'ANTHROPIC_AUTH_TOKEN':'changed-secret'}):
+            with self.assertRaisesRegex(ProviderError, 'provider_configuration_changed'):
+                registry.build_launch('claude',prompt='synthetic',cwd=self.root)
+            registry.discover(refresh=True)
+            launch = registry.build_launch('claude',prompt='synthetic',cwd=self.root)
+            self.assertEqual(launch.env['ANTHROPIC_AUTH_TOKEN'], 'changed-secret')
+            self.assertNotIn('changed-secret', repr(launch))
+            self.assertNotIn('changed-secret', json.dumps(registry.discover()))
+
     def test_execution_fail_closed_and_option_injection_rejected(self):
         registry = self.registry()
         for provider in ('codex','claude','agy'):
@@ -152,9 +165,9 @@ else:raise RuntimeError('unsupported command')
             registry.build_launch('/bin/sh',prompt='Plan',cwd=self.root)
 
     def modern_claude(self, version='2.1.301', extra_flags=''):
-        flags = '--print --output-format --bare --tools --disallowedTools --strict-mcp-config --mcp-config --disable-slash-commands --permission-mode --no-session-persistence --max-turns --restricted --permission-prompts'
+        flags = '--print --output-format --safe-mode --settings --tools --disallowedTools --strict-mcp-config --mcp-config --disable-slash-commands --permission-mode --no-session-persistence --max-turns --restricted --permission-prompts'
         flags += ' ' + extra_flags
-        self.cli('claude', "import sys,json\nif sys.argv[1:]==['auth','status']: print(json.dumps({'loggedIn':True}))\nelif sys.argv[1:]==['--help']:print("+repr(flags)+")\nelif sys.argv[1:]==['--version']:print("+repr(version)+")\nelse:raise RuntimeError('discovery attempted model call')\n")
+        self.cli('claude', "import sys,json\nif sys.argv[1:] in (['auth','status'],['--safe-mode','--restricted','auth','status']): print(json.dumps({'loggedIn':True}))\nelif sys.argv[1:]==['--help']:print("+repr(flags)+")\nelif sys.argv[1:]==['--version']:print("+repr(version)+")\nelse:raise RuntimeError('discovery attempted model call')\n")
 
     def test_claude_tool_free_planning_and_finite_worker_launch(self):
         self.modern_claude()
@@ -162,6 +175,7 @@ else:raise RuntimeError('unsupported command')
         record = registry.discover(refresh=True)[1]
         self.assertEqual(record['planning_isolation'], 'model_tools_denied')
         with patch.dict(os.environ, {'ANTHROPIC_API_KEY':'SECRET'}):
+            registry.discover(refresh=True)
             plan = registry.build_launch('claude',prompt='PRIVATE prompt',cwd=self.root)
         self.assertEqual(plan.stdin, b'PRIVATE prompt')
         self.assertNotIn('PRIVATE', repr(plan))
@@ -169,9 +183,15 @@ else:raise RuntimeError('unsupported command')
         self.assertEqual(plan.argv[plan.argv.index('--tools')+1], '')
         self.assertEqual(plan.argv[plan.argv.index('--disallowedTools')+1], '*')
         self.assertIn('--restricted', plan.argv)
+        self.assertIn('--safe-mode', plan.argv)
+        self.assertNotIn('--bare', plan.argv)
+        self.assertTrue(json.loads(plan.argv[plan.argv.index('--settings')+1])['disableAllHooks'])
+        self.assertEqual(plan.argv[plan.argv.index('--max-turns')+1], '1')
+        registry.discover(refresh=True)
         worker = registry.build_launch('claude','model-x',phase='worker',prompt='edit',cwd=self.root)
         self.assertEqual(worker.argv[worker.argv.index('--tools')+1], 'Read,Edit,Write,Glob,Grep')
         self.assertIn('Bash', worker.argv)
+        self.assertEqual(worker.argv[worker.argv.index('--max-turns')+1], '8')
         self.assertIn('mcp__*', worker.argv)
         self.assertIn('Edit(./.ai-collab/**)', worker.argv)
         self.assertIn('Edit(./.git)', worker.argv)
@@ -241,7 +261,7 @@ else:raise RuntimeError('unsupported command')
         self.assertEqual('1',launch.env['CLAUDE_CODE_SUBPROCESS_ENV_SCRUB'])
         self.assertIn('Edit(./.claude)',launch.argv);self.assertIn('Edit(./.codex/**)',launch.argv)
         plan=registry.build_launch('claude',prompt='plan',cwd=original)
-        self.assertEqual('',plan.argv[plan.argv.index('--tools')+1]);self.assertNotIn('--settings',plan.argv)
+        self.assertEqual('',plan.argv[plan.argv.index('--tools')+1]);self.assertEqual({'disableAllHooks':True},json.loads(plan.argv[plan.argv.index('--settings')+1]))
 
     def test_claude_native_windows_and_missing_dependencies_file_only(self):
         from auto_providers.claude import sandbox_capability
