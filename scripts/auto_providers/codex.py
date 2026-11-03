@@ -225,7 +225,7 @@ def _toml(value):
     raise ProviderError("invalid_override")
 
 
-def fixed_startup_argv(executable, phase, cwd):
+def fixed_startup_argv(executable, phase, cwd, *, disabled_mcp=()):
     """Only fixed argv, never a shell command; no prompt/credential in argv.
 
     Existing MCP configuration is NOT erased by an empty-table merge. The engine
@@ -238,7 +238,23 @@ def fixed_startup_argv(executable, phase, cwd):
     argv = [executable, "app-server"]
     for key, value in config_overrides(phase, cwd).items():
         argv.extend(("-c", key + "=" + _toml(value)))
+    for key, value in mcp_overrides(disabled_mcp).items():
+        argv.extend(("-c", key + "=" + _toml(value)))
     return tuple(argv)
+
+
+def mcp_overrides(names):
+    # Use a structured root table: the CLI override key parser is not a full
+    # TOML dotted-key parser. Names are data in the table, never key paths.
+    try:
+        names = tuple(names)
+    except TypeError:
+        raise ProviderError("codex_mcp_inventory_invalid") from None
+    if (len(names) > MAX_ITEMS or sum(len(n) for n in names if isinstance(n, str)) > 8192
+            or any(not isinstance(n, str) or not n or len(n) > 256
+                   or any(ord(c) < 32 or 0x7f <= ord(c) <= 0x9f or 0xd800 <= ord(c) <= 0xdfff for c in n) for n in names)):
+        raise ProviderError("codex_mcp_inventory_invalid")
+    return {"mcp_servers": {name: {"enabled": False} for name in names}} if names else {}
 
 
 def _get(value, dotted):
@@ -289,7 +305,7 @@ def _exact_config(actual, expected):
     return actual == expected
 
 
-def verify_effective_config(config, phase, cwd):
+def verify_effective_config(config, phase, cwd, *, inventory_only=False):
     if not isinstance(config, dict):
         raise ProviderError("codex_effective_config_unverified")
     for key, expected in config_overrides(phase, cwd).items():
@@ -304,10 +320,10 @@ def verify_effective_config(config, phase, cwd):
     if environment.get("filters") or environment.get("set"):
         raise ProviderError("codex_environment_unverified")
     servers = config.get("mcp_servers", {})
-    if not isinstance(servers, dict) or any(
-        not isinstance(entry, dict) or entry.get("enabled") is not False
-        for entry in servers.values()
-    ):
+    if not isinstance(servers, dict) or any(not isinstance(entry, dict) for entry in servers.values()):
+        raise ProviderError("codex_mcp_inventory_invalid")
+    mcp_overrides(servers.keys())  # Validate bounded names, not server commands.
+    if not inventory_only and any(entry.get("enabled") is not False for entry in servers.values()):
         raise ProviderError("codex_mcp_enabled")
     # Managed hooks can be independently enforced. Refuse even configured hooks
     # instead of guessing whether disabling the feature suppresses every source.
@@ -333,7 +349,8 @@ class CodexSession:
     a thread or turn, and does not assert execution was account-tested.
     """
     def __init__(self, phase, prompt, cwd, model_id=None, *, discovery_only=False,
-                 credential_env_names=(), expected_provider_binding=None):
+                 credential_env_names=(), expected_provider_binding=None,
+                 inventory_only=False, disabled_mcp=()):
         self.cwd = _workspace(cwd)
         self.profile = profile_name(phase, self.cwd)
         if not isinstance(prompt, str) or (not prompt and not discovery_only) or len(prompt.encode()) > MAX_OUTPUT:
@@ -342,6 +359,12 @@ class CodexSession:
             raise ProviderError("invalid_model")
         self.phase, self.prompt, self.model_id = phase, prompt, model_id
         self.discovery_only = bool(discovery_only)
+        self.inventory_only = bool(inventory_only)
+        if self.inventory_only and not self.discovery_only:
+            raise ProviderError("invalid_inventory_mode")
+        self.disabled_mcp = tuple(disabled_mcp)
+        mcp_overrides(self.disabled_mcp)
+        self.mcp_names = ()
         self.done, self.delivered, self.output, self.error_code = False, False, "", None
         self.thread_id, self.turn_id = None, None
         self.auth_status = "unknown"
@@ -471,7 +494,11 @@ class CodexSession:
             return [{"method": "initialized", "params": {}}, self._request("config/read", {
                 "includeLayers": False, "cwd": self.cwd})]
         if method == "config/read":
-            verify_effective_config(result.get("config"), self.phase, self.cwd)
+            verify_effective_config(result.get("config"), self.phase, self.cwd, inventory_only=self.inventory_only)
+            if self.inventory_only:
+                self.mcp_names = tuple(sorted(result["config"].get("mcp_servers", {})))
+                self.done = True
+                return []
             self._provider_config(result["config"])
             return [self._request("experimentalFeature/list", {"limit": 100})]
         if method == "experimentalFeature/list":
@@ -522,7 +549,7 @@ class CodexSession:
             for item in self._page(result):
                 mid, label = item.get("id"), item.get("displayName", item.get("id"))
                 if (not isinstance(mid, str) or not MODEL_ID.fullmatch(mid) or not isinstance(label, str)
-                        or len(label) > 200 or any(ord(c) < 32 for c in label)):
+                        or len(label) > 1200 or any(ord(c) < 32 for c in label)):
                     raise ProviderError("invalid_catalog")
                 if any(m["id"] == mid for m in self.models):
                     raise ProviderError("invalid_catalog")
@@ -546,18 +573,17 @@ class CodexSession:
                     raise ProviderError("codex_provider_configuration_unverified")
                 if self.model_id is None:
                     self.model_id = self._configured_model
-            if self.model_id and not any(m["id"] == self.model_id for m in self.models):
-                raise ProviderError("model_not_in_catalog")
+            # Model IDs are opaque provider data, not a catalogue allowlist.
+            # Exact thread-returned selection is checked before sending input.
             params = {"cwd": self.cwd, "permissions": self.profile, "approvalPolicy": "on-request",
                       "approvalsReviewer": "user", "ephemeral": True,
-                      "config": config_overrides(self.phase, self.cwd)}
+                      "config": {**config_overrides(self.phase, self.cwd), **mcp_overrides(self.disabled_mcp)}}
             if self.model_id:
                 params["model"] = self.model_id
             if self._custom_provider:
                 params["modelProvider"] = self._custom_provider
-                # Protocol default is false; explicit false is supported by the
-                # experimental API already required for named permissions.
-                params["allowProviderModelFallback"] = False
+            # Experimental API is already required for named permissions.
+            params["allowProviderModelFallback"] = False
             return [self._request("thread/start", params)]
         if method == "thread/start":
             active = result.get("activePermissionProfile")
@@ -565,8 +591,8 @@ class CodexSession:
                     or result.get("cwd") != self.cwd or result.get("approvalPolicy") != "on-request"
                     or result.get("approvalsReviewer") != "user"):
                 raise ProviderError("codex_thread_policy_unverified")
-            if (self._custom_provider and
-                    (result.get("model") != self.model_id or result.get("modelProvider") != self._custom_provider)):
+            if ((self.model_id is not None and result.get("model") != self.model_id)
+                    or (self._custom_provider and result.get("modelProvider") != self._custom_provider)):
                 raise ProviderError("codex_thread_model_unverified")
             thread = result.get("thread")
             if not isinstance(thread, dict):

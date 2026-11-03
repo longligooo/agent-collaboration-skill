@@ -1,4 +1,4 @@
-"""Bounded current-working-content snapshots, never mutate the original Git repo.
+"""Bounded current-working-content snapshots, never mutate the original project directory.
 
 Git is used only for names/identity, never checkout, filters, status, or patches.
 Capabilities is metadata-only; ensure captures bytes after task approval.
@@ -28,6 +28,8 @@ EXCLUDED_DIRS = {'.git', '.ai-collab', '.codex', '.claude', '.aws', '.ssh', '.ge
 EXCLUDED_NAMES = {'credentials', 'credentials.json', 'credentials.yml', 'credentials.yaml',
                   'secrets.json', 'secrets.yml', 'secrets.yaml', 'id_rsa', 'id_ed25519',
                   '.git-credentials', '.npmrc', '.pypirc', '.netrc'}
+PLAIN_EXCLUDED_DIRS = {'node_modules', '.venv', 'venv', '__pycache__', '.cache'}
+DIRECTORY_EXCLUSION_POLICY = 'Plain directory: no Git executable required. Folders containing .gitignore/.ignore/.gitmodules are blocked rather than silently ignoring exclusions. Control/credential paths and common dependency/cache directories are excluded; .gitignore is not interpreted. Embedded secrets in ordinary documents cannot be identified automatically.'
 EXCLUSION_POLICY = 'Git-ignored untracked files; control/credential directories; .env*; credential names; private key extensions; exact broker metadata. Embedded secrets in ordinary source cannot be identified automatically.'
 
 def _git(root, *args, input=None, timeout=15):
@@ -188,6 +190,60 @@ def _index_identity(root):
 
 
 def _inventory(root, metadata=()):
+    # Check markers without invoking Git: plain folders work with Git absent.
+    # A malformed/unreadable repository never silently becomes a plain folder.
+    for ancestor in (root, *root.parents):
+        marker = ancestor / '.git'
+        if os.path.lexists(marker):
+            if auto_process.is_unsafe_link(marker):
+                _error('unsafe_path', 'Git marker alias rejected')
+            return _git_inventory(root, metadata)
+    if (root / 'HEAD').exists() and (root / 'objects').is_dir() and (root / 'refs').is_dir():
+        _error('not_git', 'bare repository cannot be used as a document folder')
+    return _directory_inventory(root, metadata)
+
+
+def _directory_inventory(root, metadata=()):
+    entries, names, omitted, total, candidates = {}, [], [], 0, 0
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        _safe(root, directory.relative_to(root).as_posix()) if directory != root else _root(root)
+        try:
+            with os.scandir(directory) as children:
+                for child in children:
+                    candidates += 1
+                    if candidates > 32768:
+                        _error('snapshot_limit', 'too many source entries')
+                    path = Path(directory) / child.name
+                    name = path.relative_to(root).as_posix()
+                    if _omitted(name, metadata):
+                        omitted.append(name); continue
+                    _name(name); _safe(root, name)
+                    st = child.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(st.st_mode):
+                        if child.name.lower() in PLAIN_EXCLUDED_DIRS:
+                            omitted.append(name); continue
+                        if os.path.lexists(path / '.git'):
+                            _error('unsupported_nested_repository', 'nested repositories require a separate registered project')
+                        if len(stack) >= MAX_FILES * 2:
+                            _error('snapshot_limit', 'too many source directories')
+                        stack.append(path)
+                        continue
+                    if child.name.lower() in ('.gitignore', '.ignore', '.gitmodules'):
+                        _error('plain_ignore_rules_unsupported', 'plain folders with ignore rules require explicit review; files are not silently included')
+                    st = _regular(path)
+                    names.append(name); entries[name] = _fingerprint(st); total += st.st_size
+                    if len(entries) > MAX_FILES or total > MAX_TOTAL_BYTES:
+                        _error('snapshot_limit', 'snapshot file count or total bytes exceeds limit')
+        except OSError:
+            _error('snapshot_unreadable', 'project directory could not be completely enumerated')
+    return {'source_kind': 'directory', 'head': None, 'index': None,
+            'names': sorted(names), 'entries': dict(sorted(entries.items())),
+            'omitted': sorted(omitted), 'bytes': total}
+
+
+def _git_inventory(root, metadata=()):
     code, top = _git(root, 'rev-parse', '--show-toplevel')
     if code or Path(os.fsdecode(top).strip()).resolve() != root:
         _error('not_git', 'registered root must be a Git repository root')
@@ -218,7 +274,7 @@ def _inventory(root, metadata=()):
         entries[name] = _fingerprint(st); total += st.st_size
         if len(entries) > MAX_FILES or total > MAX_TOTAL_BYTES:
             _error('snapshot_limit', 'snapshot file count or total bytes exceeds limit')
-    return {'head': head, 'index': _index_identity(root), 'names': names,
+    return {'source_kind': 'git', 'head': head, 'index': _index_identity(root), 'names': names,
             'entries': entries, 'omitted': omitted, 'bytes': total}
 
 
@@ -240,7 +296,7 @@ def capabilities(root, *, metadata_paths=()):
         inv = _inventory(root, metadata_paths)
     except AutoError as exc:
         result['reason'] = exc.code; return result
-    result.update(supported=True, base_commit=inv['head'], file_count=len(inv['entries']),
+    result.update(supported=True, source_kind=inv['source_kind'], exclusion_policy=DIRECTORY_EXCLUSION_POLICY if inv['source_kind'] == 'directory' else EXCLUSION_POLICY, base_commit=inv['head'], file_count=len(inv['entries']),
                   estimated_bytes=inv['bytes'], omitted_count=len(inv['omitted']),
                   omitted_paths=_visible_names(inv['omitted']), omitted_paths_truncated=len(inv['omitted']) != len(_visible_names(inv['omitted'])))
     return result
@@ -309,8 +365,10 @@ class WorkspaceManager:
         if not isinstance(value, dict):
             _error('workspace_conflict', 'snapshot descriptor must be an object')
         if (not isinstance(value.get('snapshot_id'), str) or not re.fullmatch(r'[0-9a-f]{64}', value['snapshot_id']) or
-            value.get('diff_base') != value['snapshot_id'] or not isinstance(value.get('base_commit'), str) or
-            not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value['base_commit']) or
+            value.get('diff_base') != value['snapshot_id'] or
+            not ((value.get('source_kind', 'git') == 'git' and isinstance(value.get('base_commit'), str) and
+                  re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value['base_commit'])) or
+                 (value.get('source_kind') == 'directory' and value.get('base_commit') is None)) or
             value.get('requires_clean') is not False or value.get('supported') is not True or
             value.get('capture_status') != 'captured' or type(value.get('file_count')) is not int):
             _error('workspace_conflict', 'snapshot descriptor scalars are invalid')
@@ -383,9 +441,10 @@ class WorkspaceManager:
                 if len(raw) > MAX_OUTPUT: _error('snapshot_limit', 'snapshot manifest exceeds limit')
                 snapshot_id = _hash(raw)
                 value = {'kind': 'managed_snapshot', 'project_id': project_id, 'task_id': task_id,
-                         'project_root': str(root), 'base_commit': before['head'], 'snapshot_id': snapshot_id,
+                         'project_root': str(root), 'source_kind': before['source_kind'], 'base_commit': before['head'], 'snapshot_id': snapshot_id,
                          'diff_base': snapshot_id, 'supported': True, 'requires_clean': False,
-                         'capture_status': 'captured', 'reason': None, 'exclusion_policy': EXCLUSION_POLICY,
+                         'capture_status': 'captured', 'reason': None,
+                         'exclusion_policy': DIRECTORY_EXCLUSION_POLICY if before['source_kind'] == 'directory' else EXCLUSION_POLICY,
                          'file_count': len(entries), 'omitted_count': len(before['omitted']),
                          'omitted_paths': _visible_names(before['omitted']), 'omitted_paths_truncated': len(before['omitted']) != len(_visible_names(before['omitted']))}
                 _write(stage / 'baseline.json', raw, 0o400)
@@ -438,7 +497,7 @@ class WorkspaceManager:
             _error('project_changed', 'output changed before export publication')
         complete = {'format': 'snapshot_changes_v1', 'diff_base': value['snapshot_id'],
                     'baseline_manifest': str(directory / 'baseline.json'),
-                    'project_root': value['project_root'], 'base_commit': value['base_commit'],
+                    'project_root': value['project_root'], 'source_kind': value.get('source_kind', 'git'), 'base_commit': value['base_commit'],
                     'changes': changes, 'application': {'status': 'pending', 'automatic': False},
                     'apply_rule': 'Explicit human action only. Before any write, verify original file hash/mode or expected absence against every before entry; abort on any conflict. Never overwrite unrelated later edits.'}
         raw = _json(complete)
@@ -477,7 +536,7 @@ class WorkspaceManager:
         for change in changes:
             if change['kind'] == 'added' and len(_json(names + [change['path']])) <= 64 * 1024:
                 names.append(change['path'])
-        return {'status': 'pending', 'automatic': False, 'base_commit': value['base_commit'],
+        return {'status': 'pending', 'automatic': False, 'source_kind': value.get('source_kind', 'git'), 'base_commit': value['base_commit'],
                 'diff_base': value['snapshot_id'], 'tracked_patch': ''.join(patches), 'patch_truncated': patch_truncated,
                 'patch_sha256': _hash(''.join(patches).encode('utf-8')), 'untracked_files': names,
                 'untracked_files_truncated': len(names) != sum(c['kind'] == 'added' for c in changes),

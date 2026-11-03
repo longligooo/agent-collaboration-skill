@@ -72,11 +72,11 @@ for line in sys.stdin:
         self.assertEqual(record['models'], [])
 
     def test_codex_bad_json(self):
-        self.cli('codex', "print('not json',flush=True)\n")
+        self.cli('codex', "import sys\nsys.stdin.readline()\nprint('not json',flush=True)\nsys.stdin.read()\n")
         self.assertEqual(self.registry().discover(refresh=True)[0]['probe_error'], 'invalid_probe_response')
 
     def test_codex_reject_server_requests(self):
-        self.cli('codex', "import json\nprint(json.dumps({'id':99,'method':'account/login/start','params':{}}),flush=True)\n")
+        self.cli('codex', "import json,sys\nsys.stdin.readline()\nprint(json.dumps({'id':99,'method':'account/login/start','params':{}}),flush=True)\nreply=json.loads(sys.stdin.readline())\nassert reply['error']['code']==-32601\n")
         self.assertEqual(self.registry().discover(refresh=True)[0]['probe_error'], 'codex_unknown_server_request')
 
     def test_timeout_bounded_and_no_output_leak(self):
@@ -87,7 +87,7 @@ for line in sys.stdin:
         self.assertLess(time.monotonic()-start, 3)
 
     def test_output_bounded(self):
-        self.cli('codex', "print('SECRET'*10000,flush=True)\n")
+        self.cli('codex', "import sys\nsys.stdin.readline()\nprint('SECRET'*10000,flush=True)\nsys.stdin.read()\n")
         record = self.registry(max_output=1024).discover(refresh=True)[0]
         self.assertEqual(record['probe_error'], 'output_limit')
         self.assertNotIn('SECRET', json.dumps(record))

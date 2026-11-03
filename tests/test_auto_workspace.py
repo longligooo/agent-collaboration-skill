@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+from workspace_fixture import isolate_ancestor_markers
 import auto_workspace as module
 from auto_workspace import WorkspaceManager, capabilities
 from auto_model import AutoError
@@ -218,7 +219,9 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaises(AutoError): self.manager.diff(workspace)
 
     def test_non_git_unborn_and_service_alias_rejected(self):
-        empty = self.base / 'empty'; empty.mkdir(); self.assertEqual('not_git', capabilities(empty)['reason'])
+        empty = self.base / 'empty'; empty.mkdir()
+        with isolate_ancestor_markers(self.base):
+            self.assertTrue(capabilities(empty)['supported'])
         subprocess.run(['git', 'init', '-q', str(empty)], check=True); self.assertEqual('unborn_git_head', capabilities(empty)['reason'])
         with self.assertRaises(AutoError): WorkspaceManager(self.root / 'managed').ensure(self.root, 'project', 'bad')
         (self.base / 'alias').symlink_to(self.manager.home, target_is_directory=True)
@@ -245,5 +248,14 @@ class WorkspaceTests(unittest.TestCase):
         changes = {v['path']: v for v in self.manager.diff(workspace)['changes']}
         self.assertTrue(changes['run.sh']['before']['executable']); self.assertFalse(changes['run.sh']['after']['executable'])
         self.assertTrue(changes['added.bin']['binary_or_large'])
+
+    def test_existing_git_descriptor_without_source_kind_remains_supported(self):
+        workspace = self.manager.ensure(self.root, 'project', 'legacy')
+        descriptor = Path(workspace['path']).parent / 'workspace.json'
+        descriptor.chmod(0o600)
+        value = json.loads(descriptor.read_text()); value.pop('source_kind')
+        descriptor.write_text(json.dumps(value))
+        self.assertEqual(workspace['snapshot_id'], self.manager.describe(self.root, 'project', 'legacy')['snapshot_id'])
+        self.assertEqual(0, self.manager.diff(workspace)['change_count'])
 
 if __name__ == '__main__': unittest.main()

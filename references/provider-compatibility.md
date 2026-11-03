@@ -155,8 +155,9 @@ flags, absent credentials and incomplete provider config remain blocked.
 Discovery privately binds the exact effective provider table and default model.
 Execution revalidates this binding after reading configuration in the task cwd,
 so project configuration cannot silently change the provider, endpoint, helper
-or configured model. Only the exact configured model is offered for a custom
-provider: Codex may return a bundled OpenAI catalog unrelated to the gateway.
+or configured default model. The configured model is offered as a suggestion;
+a user may enter another exact model ID. Codex may return a bundled OpenAI
+catalog unrelated to the gateway, so catalog membership is not an allowlist.
 Thread creation sends the exact model/provider with provider fallback disabled
 and verifies both returned values before sending any prompt. The existing
 sandbox, approval, permission-profile and tool checks remain unchanged.
@@ -179,3 +180,41 @@ Sources: [account semantics](https://developers.openai.com/codex/app-server/),
 [experimental fallback default](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/protocol/v2/thread.rs#L59-L68),
 [telemetry opt-out](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/core/src/otel_init.rs#L64-L75),
 [nested sandbox issue](https://github.com/openai/codex/issues/53799).
+
+## Third-party model names
+
+Model names are opaque provider data, not a whitelist. Users may type a model
+name directly in the WebUI; the catalog supplies suggestions only. Persistence,
+provider environment import, JSON requests, and Claude argv preserve the exact
+string, including spaces, Unicode, `@`, brackets, and punctuation. Names must
+contain a non-whitespace character, be at most 1024 characters, not begin with
+`-`, and contain no C0/C1 control characters or UTF-16 surrogates. These checks
+protect transport integrity, not model availability. Arguments are passed without
+a shell. A configured or typed name is not evidence that a remote provider accepts
+it, and Codex must still confirm the exact selected model before sending a prompt.
+
+
+## MCP isolation without changing local CLI settings
+
+Configured Codex MCP servers no longer make the whole provider unavailable. A
+bounded inventory session initializes the app-server and reads effective config
+without account/model/thread requests. The actual provider process receives a
+structured `mcp_servers` override marking each discovered entry `enabled=false`.
+Root-table encoding preserves dots/quotes as part of a server name. Empty-table
+replacement is not assumed to clear inherited configuration.
+
+Discovery and every actual launch repeat effective validation: all MCP entries
+must be explicitly disabled before any thread is created. Inventory at the task
+cwd covers project/managed entries too; a new enabled entry or ignored override
+fails closed. The disabled table is carried into thread-start overrides. User
+configuration files are never edited, and normal terminal CLI MCP use is unchanged.
+
+`python tests/provider_mcp_smoke.py --codex /absolute/path/to/trusted/native/codex`
+runs an opt-in real CLI sentinel test using a temporary synthetic home. Tested
+with official Codex 0.166.0: three configured MCP commands (including dotted and
+quoted names) did not run during inventory/protected discovery, and user config
+bytes stayed unchanged. Planning and worker launch contracts were built. No
+model or thread was started; actual thread-time suppression cannot be established
+on this nested-sandbox host, and is not claimed by that test. Unit/protocol tests
+also verify disabled entries at thread start, unexpected enabled entries and
+unchanged permission checks.

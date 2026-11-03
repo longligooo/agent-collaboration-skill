@@ -131,9 +131,20 @@ reason. Windows fixture paths/PE headers are synthetic, not native execution pro
 Custom Codex provider state is `configured`, not `authenticated`, when the
 protocol explicitly says no OpenAI auth is required and a trusted credential
 source, endpoint and model are configured. The exact effective provider table
-and model are privately bound across discovery and execution. Only that configured
-model is eligible; bundled catalog models are not gateway entitlements. Provider
+and default model are privately bound across discovery and execution. Users may
+select another opaque model ID; catalogs are suggestions, not allowlists or
+gateway entitlements. Provider
 fallback is explicitly false and thread-returned model/provider must match before
 a turn is sent. No remote credential-validity claim is made. Optional analytics
 and OTEL exporters are disabled and verified. Real Codex execution remains
 blocked by the test host's nested sandbox; no sandbox controls were weakened.
+
+
+MCP inventory mode is limited to initialize/config-read and cannot start an
+account request, model catalog, thread or turn. Configured MCP entries are
+passed as structured per-process disabled overrides, including in thread start.
+Normal execution still requires every effective MCP entry enabled exactly false.
+A changed/unknown enabled entry fails closed. Permission profiles and other
+startup restrictions are verified even in inventory mode. Real CLI sentinel
+tests prove no MCP startup during inventory/discovery; actual model-thread
+execution is still limited by the documented nested sandbox on this test host.

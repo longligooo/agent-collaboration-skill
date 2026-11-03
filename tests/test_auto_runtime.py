@@ -60,6 +60,8 @@ for line in sys.stdin:
   open('denial-flushed','w').write(json.dumps(r));time.sleep(60)
  method=r.get('method')
  if method=='turn/start' and mode=='before_ack':sys.exit(0)
+ if method=='thread/start' and mode=='mcp':
+  assert r['params']['config']['mcp_servers']=={'a.b':{'enabled':False}}
  response=f.answer(r)
  if response:print(json.dumps(response),flush=True)
  if method=='turn/start':
@@ -322,7 +324,7 @@ class RuntimeTests(unittest.TestCase):
         def build(provider_id, model_id=None, *, phase, prompt, cwd):
             return LaunchSpec((sys.executable,str(self.script),str(Path(__file__).parent.resolve()),mode),
                 prompt.encode(),Path(cwd),dict(os.environ),output_format='codex-app-server',timeout=5,
-                transport={'phase':phase,'model_id':model_id})
+                transport={'phase':phase,'model_id':model_id,'disabled_mcp':('a.b',) if mode=='mcp' else ()})
         self.providers.build_launch=build
 
     def test_codex_terminal_event_completes_without_process_exit(self):
@@ -332,6 +334,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual('succeeded',job['state'])
         self.assertFalse(runtime_activity.process_alive(job['pid']))
         self.assertEqual('Fixture goal',task['plan']['goal'])
+
+    def test_codex_runtime_carries_mcp_isolation_metadata(self):
+        self.codex_transport('mcp')
+        task=self.planned()
+        self.assertEqual('succeeded',self.store.list_jobs(task['id'])[0]['state'])
 
     def test_codex_zero_exit_without_terminal_is_failure(self):
         for mode in ('before_ack','after_ack'):

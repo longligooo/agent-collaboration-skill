@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from auto_providers import ProviderError
 from auto_providers.codex import (CodexSession, DISABLED_FEATURES, config_overrides,
-    fixed_startup_argv, permission_profile, verify_effective_config, resolve_executable)
+    fixed_startup_argv, permission_profile, verify_effective_config, resolve_executable, mcp_overrides, _toml)
 
 
 def effective(phase, cwd):
@@ -54,7 +54,8 @@ class Fixture:
             result = {'data': [{'id': 'model-a', 'displayName': 'Model A'}], 'nextCursor': None}
         elif method == 'thread/start':
             result = {'thread': {'id': 'thread-1'}, 'activePermissionProfile': {'id': s.profile, 'extends': None},
-                'cwd': s.cwd, 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user'}
+                'cwd': s.cwd, 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
+                'model': s.model_id or 'model-a', 'modelProvider': 'openai'}
         elif method == 'turn/start':
             result = {'turn': {'id': 'turn-1', 'status': 'inProgress'}}
         else:
@@ -350,15 +351,15 @@ class CodexTests(unittest.TestCase):
             self.assertFalse(s.delivered)
             self.assertFalse(any(r.get('method') == 'turn/start' for r in f.sent))
 
-    def test_auth_missing_and_unlisted_model_do_not_start(self):
-        for missing_auth in (True, False):
-            s = self.session(model_id='absent' if not missing_auth else None)
-            f = Fixture(s)
-            if missing_auth:
-                f.modify = lambda m, r: {'account': None, 'requiresOpenaiAuth': True} if m == 'account/read' else r
-            f.handshake()
-            self.assertEqual(s.error_code, 'auth_unconfirmed' if missing_auth else 'model_not_in_catalog')
-            self.assertFalse(s.delivered)
+    def test_auth_missing_blocks_but_unlisted_model_is_opaque_data(self):
+        s=self.session();f=Fixture(s)
+        f.modify=lambda m,r:{'account':None,'requiresOpenaiAuth':True} if m=='account/read' else r
+        f.handshake();self.assertEqual(s.error_code,'auth_unconfirmed');self.assertFalse(s.delivered)
+        s=self.session(model_id='unlisted/provider-model');f=Fixture(s);f.handshake()
+        self.assertIsNone(s.error_code);self.assertTrue(s.delivered)
+        request=next(r for r in f.sent if r.get('method')=='thread/start')
+        self.assertEqual(request['params']['model'],'unlisted/provider-model')
+        self.assertIs(request['params']['allowProviderModelFallback'],False)
 
     def custom_fixture(self, *, discovery=True, model=None, binding=None, keys=('ROUTER_API_KEY',), provider=None):
         session=self.session(discovery_only=discovery, model_id=model,
@@ -433,13 +434,16 @@ class CodexTests(unittest.TestCase):
             self.assertEqual(session.error_code,'codex_thread_model_unverified')
             self.assertFalse(any(r.get('method')=='turn/start' for r in fixture.sent))
 
-    def test_custom_model_cannot_select_bundled_or_other_model(self):
+    def test_custom_explicit_model_need_not_appear_in_catalog(self):
         discovery,probe=self.custom_fixture();probe.handshake()
         for model in ('model-a','vendor/other:paid'):
             session,fixture=self.custom_fixture(discovery=False,model=model,binding=discovery.provider_binding)
             fixture.handshake()
-            self.assertEqual(session.error_code,'model_not_in_catalog')
-            self.assertFalse(any(r.get('method')=='thread/start' for r in fixture.sent))
+            self.assertIsNone(session.error_code)
+            self.assertTrue(session.delivered)
+            request=next(r for r in fixture.sent if r.get('method')=='thread/start')
+            self.assertEqual(request['params']['model'],model)
+            self.assertIs(request['params']['allowProviderModelFallback'],False)
 
     def test_custom_binding_required_and_configuration_change_rejected(self):
         discovery,probe=self.custom_fixture();probe.handshake()
@@ -471,6 +475,55 @@ class CodexTests(unittest.TestCase):
             config[first][last]=True if last=='enabled' else 'statsig'
             with self.assertRaisesRegex(ProviderError,'codex_effective_config_unverified'):
                 verify_effective_config(config,'planning',self.root)
+
+    def test_mcp_inventory_never_starts_account_model_or_thread(self):
+        session=self.session(discovery_only=True,inventory_only=True)
+        fixture=Fixture(session)
+        fixture.config['mcp_servers']={'one':{'command':'NEVER_EXECUTE'},'a.b':{'enabled':True}}
+        fixture.handshake()
+        self.assertIsNone(session.error_code)
+        self.assertEqual(session.mcp_names,('a.b','one'))
+        self.assertEqual([r['method'] for r in fixture.sent if 'id' in r],['initialize','config/read'])
+        self.assertFalse(session.delivered)
+        with self.assertRaisesRegex(ProviderError,'invalid_inventory_mode'):
+            self.session(inventory_only=True)
+
+    def test_mcp_disabled_entries_verified_and_carried_to_thread(self):
+        names=('a.b','quoted"name')
+        session=self.session(disabled_mcp=names);fixture=Fixture(session)
+        fixture.config['mcp_servers']={name:{'command':'NEVER_EXECUTE','enabled':False} for name in names}
+        fixture.handshake();self.assertIsNone(session.error_code)
+        request=next(r for r in fixture.sent if r.get('method')=='thread/start')
+        self.assertEqual(request['params']['config']['mcp_servers'],{n:{'enabled':False} for n in names})
+        argv=fixed_startup_argv('/trusted/codex','planning',self.root,disabled_mcp=names)
+        import tomllib
+        override=next(v for v in argv if v.startswith('mcp_servers='))
+        self.assertEqual(tomllib.loads(override)['mcp_servers'],{n:{'enabled':False} for n in names})
+
+    def test_mcp_ignored_overrides_and_new_project_entry_fail_closed(self):
+        for value in (True,None,0):
+            session=self.session(disabled_mcp=('known',));fixture=Fixture(session)
+            fixture.config['mcp_servers']={'known':{'enabled':False},'new':{'enabled':value}}
+            fixture.handshake();self.assertEqual(session.error_code,'codex_mcp_enabled')
+            self.assertFalse(any(r.get('method')=='thread/start' for r in fixture.sent))
+
+    def test_mcp_inventory_still_rejects_hooks_and_bad_names(self):
+        session=self.session(discovery_only=True,inventory_only=True);fixture=Fixture(session)
+        fixture.config['hooks']={'bad':'do not execute'};fixture.handshake()
+        self.assertEqual(session.error_code,'codex_hooks_configured')
+        for names in (('bad\nname',),('bad\x00name',),('',),('x'*257,),('x'*100,)*83):
+            with self.assertRaisesRegex(ProviderError,'codex_mcp_inventory_invalid'):
+                mcp_overrides(names)
+
+    def test_explicit_opaque_model_echo_mismatch_blocks_before_turn(self):
+        for value in ('fallback',None):
+            session=self.session(model_id='vendor/模型 name@[free]');fixture=Fixture(session)
+            def change(method,result):
+                if method=='thread/start':result['model']=value
+                return result
+            fixture.modify=change;fixture.handshake()
+            self.assertEqual(session.error_code,'codex_thread_model_unverified')
+            self.assertFalse(any(r.get('method')=='turn/start' for r in fixture.sent))
 
     def test_paginated_model_catalog(self):
         s = self.session(discovery_only=True)

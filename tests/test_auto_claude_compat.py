@@ -44,6 +44,10 @@ class ClaudeCompatTests(unittest.TestCase):
             self.assertEqual(record['planning_isolation'],'model_tools_denied')
             launch=registry.build_launch('claude',phase='planning',prompt='never executed',cwd=d)
             self.assertEqual(launch.argv[launch.argv.index('--max-turns')+1],'1')
+            for model in ['vendor/model@2026[free]', '模型 名称', 'x;$(echo nope)', ' spaced ']:
+                launch=registry.build_launch('claude',model,phase='planning',prompt='never executed',cwd=d)
+                self.assertEqual(launch.argv[launch.argv.index('--model')+1],model)
+                self.assertEqual(launch.argv.count(model),1)
 
     def test_auth_status_is_cli_proof_not_key_presence(self):
         self.assertEqual(parse_auth_status(0, '{"loggedIn":true}'), 'authenticated')

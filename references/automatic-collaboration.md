@@ -147,3 +147,5 @@ Safe failed jobs can be explicitly retried; uncertain execution is not retried.
 Tests use fake CLIs and temporary registered projects. No real external model calls
 were performed for development acceptance. Fixture browser demonstrations must be
 labelled simulated; they do not establish real-provider account availability.
+
+Plain document folders without Git are also supported via immutable directory snapshots; see [non-Git projects](non-git-projects.md) for exclusions, ignore-rule limitations, and export safety.

@@ -6,6 +6,8 @@ import hashlib
 import json
 import re
 
+from auto_model_id import MODEL_ID
+
 PROVIDERS = {"codex", "claude", "agy"}
 IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 MENTION = re.compile(r"(?<![\w@])@([^\s@,;:!?()\[\]{}<>，。；：！？]+)")
@@ -66,8 +68,8 @@ def binding(value):
     if result.get("provider_id") not in PROVIDERS:
         fail("invalid", "unsupported provider")
     if result.get("model_id") is not None:
-        model = text(result["model_id"], "model_id", 200)
-        if model.startswith("-") or any(c.isspace() or ord(c) < 32 for c in model):
+        model = result["model_id"]
+        if not isinstance(model, str) or not MODEL_ID.fullmatch(model):
             fail("invalid", "invalid model_id")
     if "role" in result:
         text(result["role"], "role", 120)

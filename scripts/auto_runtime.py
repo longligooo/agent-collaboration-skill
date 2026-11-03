@@ -739,7 +739,8 @@ class Supervisor:
                 broker = CodexSession(metadata["phase"], spec.stdin.decode("utf-8"),
                                       spec.cwd, model_id=metadata.get("model_id"),
                                       credential_env_names=[k for k, v in spec.env.items() if v],
-                                      expected_provider_binding=metadata.get("provider_binding"))
+                                      expected_provider_binding=metadata.get("provider_binding"),
+                                      disabled_mcp=metadata.get("disabled_mcp", ()))
                 for value in broker.start():
                     pump.send((canonical(value) + "\n").encode())
                     pending += 1

@@ -13,6 +13,7 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+from workspace_fixture import isolate_ancestor_markers
 import auto_api
 import auto_service
 import ui_server
@@ -189,17 +190,23 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result['error']['code'],'finalization_pending')
         self.assertEqual(store.get_task(task['id'])['instruction'],'PRIVATE original')
 
-    def test_project_capabilities_and_production_launch_guard(self):
+    def test_plain_project_http_capabilities_and_create_without_git(self):
         from auto_workspace import WorkspaceManager
-        status,result=self.request(path=auto_api.PREFIX+'/projects/'+self.project+'/capabilities')
-        self.assertEqual(status,200)
-        self.assertFalse(result['execution_workspace']['supported'])
-        self.assertEqual(result['execution_workspace']['reason'],'not_git')
-        self.service.workspace_manager=WorkspaceManager(Path(self.tmp.name)/'managed')
-        status,result=self.create()
-        self.assertEqual(status,409)
-        self.assertEqual(result['error']['code'],'not_git')
-        self.assertEqual(self.service.store(self.root,self.project).list_tasks(),[])
+        (self.root/'draft.md').write_text('user document')
+        with isolate_ancestor_markers(Path(self.tmp.name)), patch('auto_workspace._git',side_effect=AssertionError('plain folder must not invoke Git')):
+            status,result=self.request(path=auto_api.PREFIX+'/projects/'+self.project+'/capabilities')
+            self.assertEqual(status,200)
+            self.assertTrue(result['execution_workspace']['supported'])
+            self.assertEqual(result['execution_workspace']['source_kind'],'directory')
+            self.assertIsNone(result['execution_workspace']['base_commit'])
+            self.service.workspace_manager=WorkspaceManager(Path(self.tmp.name)/'managed')
+            status,result=self.create()
+            self.assertEqual(status,201)
+            self.assertEqual(result['task']['state'],'planning')
+            self.assertIsNone(self.service.workspace_manager.describe(self.root,self.project,result['task']['id']))
+        self.assertEqual((self.root/'draft.md').read_text(),'user document')
+        self.assertFalse((self.root/'.git').exists())
+        self.assertEqual(self.providers.calls,[])
 
     def test_dirty_project_http_preflight_and_create_preserve_originals(self):
         from auto_workspace import WorkspaceManager

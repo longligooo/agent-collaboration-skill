@@ -1,0 +1,13 @@
+# Plain document directories
+
+Automatic collaboration supports ordinary local directories as well as Git repository roots. A plain directory needs neither a Git executable nor `git init`. Register the folder normally, create a task, review its team, and approve it. The first approved worker captures the current files into a private baseline and checkout. Planning alone does not capture or modify the original.
+
+Plain snapshots identify their source as `source_kind: directory`; `base_commit` is null. Their SHA-256 baseline, not a Git commit, anchors all changes. Text previews and binary-aware exports include additions, modifications and deletions. Export never writes to the original. Any later human application must compare original file hashes/modes against the baseline first and abort on conflicts. Later edits in the original are preserved, not silently merged. Empty directories are not preserved.
+
+The same limits apply: at most 4,096 files, 16 MiB per file and 128 MiB total. Enumeration is bounded. Links, junctions, special files, unsupported names and nested repositories are refused. Credential/control paths (`.env*`, `.git`, `.ai-collab`, `.claude`, `.codex`, keys and credential filenames) are excluded, as are `node_modules`, `.venv`, `venv`, `__pycache__` and `.cache` directories. Exclusions are reported. These rules cannot identify secrets embedded in ordinary documents; review the folder before granting a model access.
+
+A plain folder containing `.gitignore`, `.ignore` or `.gitmodules` is currently refused with `plain_ignore_rules_unsupported`, rather than silently copying files the user expected to exclude. Use a separately reviewed document-only folder or an existing supported Git repository. Do not remove ignore rules merely to bypass this check. Any ancestor `.git` marker, including one missing `HEAD` or pointing through an alias, must pass Git-root validation or is rejected. A subfolder is not silently treated as a plain folder; register its repository root. Git roots continue using the existing tracked/non-ignored file enumeration; unborn repositories and submodules retain their prior limitations.
+
+Capture compares file identities, names and hashes across multiple passes. It detects observed concurrent changes but does not claim a filesystem-wide atomic snapshot. Failed or partial captures never become a usable workspace. No Git metadata, commits or branches are created in plain directories.
+
+Snapshot tests isolate only `.git` markers outside their disposable fixture ancestry when the execution host supplies protected scaffolding. Markers, ignore files, reads, copies and exports inside the fixture remain real. This test isolation does not alter production checks or prove native Windows behavior.

@@ -26,7 +26,7 @@ from pathlib import Path
 import auto_process
 
 PROVIDERS = ("codex", "claude", "agy")
-MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}\Z")
+from auto_model_id import MODEL_ID
 
 
 class ProviderError(ValueError):
@@ -160,7 +160,7 @@ def _models(items, *, key="id", label="displayName"):
         name = item.get(label, value)
         if not isinstance(value, str) or not MODEL_ID.fullmatch(value):
             raise ProviderError("invalid_catalog")
-        if not isinstance(name, str) or len(name) > 200 or any(ord(c) < 32 for c in name):
+        if not isinstance(name, str) or len(name) > 1200 or any(ord(c) < 32 for c in name):
             raise ProviderError("invalid_catalog")
         if value not in seen:
             result.append({"id": value, "label": name})
@@ -236,13 +236,10 @@ class ProviderRegistry:
         finally:
             proc.close()
 
-    def _codex(self, executable, cwd, record):
-        from .codex import CodexSession, fixed_startup_argv
-        env = self._env("codex")
-        session = CodexSession("planning", "", cwd, discovery_only=True,
-                               credential_env_names=[k for k, v in env.items() if v])
-        proc = _Process(fixed_startup_argv(executable, "planning", cwd), cwd=cwd,
-                        env=env, timeout=self.timeout, max_output=self.max_output)
+    def _codex_probe(self, executable, cwd, session, env, disabled_mcp=()):
+        from .codex import fixed_startup_argv
+        proc = _Process(fixed_startup_argv(executable, session.phase, cwd, disabled_mcp=disabled_mcp),
+                        cwd=cwd, env=env, timeout=self.timeout, max_output=self.max_output)
         try:
             for outgoing in session.start():
                 proc.send(outgoing)
@@ -259,18 +256,37 @@ class ProviderRegistry:
                     proc.send(outgoing)
             if session.error_code:
                 raise ProviderError(session.error_code)
-            record.update(session.capabilities)
-            record["auth_status"] = session.auth_status
-            record["headless_status"] = "available"
-            record["models"] = session.models
-            self._codex_provider_binding = session.provider_binding
-            record["catalog_status"] = "unknown" if session.provider_binding else "fresh"
-            record["catalog_source"] = "codex.local_config" if session.provider_binding else "codex.app-server.model/list"
-            if session.provider_binding:
-                record["catalog_reason"] = "local_config_not_provider_verified"
-            record["unavailable_reason"] = None if session.auth_status in ("authenticated", "configured") else "auth_unconfirmed"
+            return session
         finally:
             proc.close()
+
+    def _codex_mcp_inventory(self, executable, cwd, env, phase="planning"):
+        from .codex import CodexSession
+        # This session can only initialize + read config; no account/model/thread
+        # requests are made. Configured MCP is started by Codex thread creation,
+        # not this inventory phase (covered by real CLI sentinel smoke).
+        session = CodexSession(phase, "", cwd, discovery_only=True, inventory_only=True)
+        return self._codex_probe(executable, cwd, session, env).mcp_names
+
+    def _codex(self, executable, cwd, record):
+        from .codex import CodexSession
+        env = self._env("codex")
+        names = self._codex_mcp_inventory(executable, cwd, env)
+        session = CodexSession("planning", "", cwd, discovery_only=True,
+            credential_env_names=[k for k, v in env.items() if v], disabled_mcp=names)
+        self._codex_probe(executable, cwd, session, env, names)
+        record.update(session.capabilities)
+        record["auth_status"] = session.auth_status
+        record["headless_status"] = "available"
+        record["models"] = session.models
+        record["mcp_isolation"] = "disabled_per_process"
+        record["mcp_disabled_count"] = len(names)
+        self._codex_provider_binding = session.provider_binding
+        record["catalog_status"] = "unknown" if session.provider_binding else "fresh"
+        record["catalog_source"] = "codex.local_config" if session.provider_binding else "codex.app-server.model/list"
+        if session.provider_binding:
+            record["catalog_reason"] = "local_config_not_provider_verified"
+        record["unavailable_reason"] = None if session.auth_status in ("authenticated", "configured") else "auth_unconfirmed"
 
     def _claude(self, executable, cwd, record):
         code, output = self._command((executable, "auth", "status"), cwd, "claude")
@@ -434,10 +450,13 @@ class ProviderRegistry:
             raise ProviderError("invalid_workspace")
         if provider_id == "codex":
             from .codex import fixed_startup_argv
-            return LaunchSpec(fixed_startup_argv(executable, phase, directory), prompt.encode("utf-8"),
+            names = self._codex_mcp_inventory(executable, directory, launch_env, phase)
+            if self._env_signature(provider_id, launch_env) != self._env_signatures.get(provider_id):
+                raise ProviderError("provider_configuration_changed")
+            return LaunchSpec(fixed_startup_argv(executable, phase, directory, disabled_mcp=names), prompt.encode("utf-8"),
                               directory, launch_env, output_format="codex-app-server",
                               transport={"phase": phase, "model_id": model_id,
-                                         "provider_binding": self._codex_provider_binding})
+                                         "provider_binding": self._codex_provider_binding, "disabled_mcp": names})
         # The trusted executable and managed policy are not sandboxed here.
         # These flags remove model-accessible execution/delegation/MCP tools.
         sandboxed = phase == "worker" and record.get("execution_status") == "sandbox_required"
