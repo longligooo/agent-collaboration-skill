@@ -13,6 +13,8 @@ Read [references/protocol.md](references/protocol.md) before creating or process
 
 When a turn's task comes from a ticket, read that ticket and the `spec.md` it cites before processing the turn. Apply [the role workflow](references/tickets.md#按角色执行任务): clarify intent before dispatch, flag material problems promptly, and ask the coordinator about unclear requirements. Use risk to choose which plans and test cases need advance review; retain code review and the ticket's required verification. These are collaboration rules; `scripts/collab.py` does not parse tickets or enforce these gates.
 
+Coordinators: when a human corrects the collaboration process or reports an unsatisfactory outcome, propose a concrete [project-local lesson](references/tickets.md#协调者反思当前项目) in the conversation. Write or change a lesson only after the human explicitly approves that wording and scope. Check the project's approved lessons before drafting or dispatching a ticket, approving a plan, or starting acceptance.
+
 Use `python scripts/collab.py --help` for deterministic workspace operations. The script uses only the Python standard library.
 
 ## Preserve These Invariants
