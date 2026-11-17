@@ -141,9 +141,9 @@ class WorkspaceTests(unittest.TestCase):
         metadata = '.scratch/automatic-task/spec.md'; target = self.root / metadata
         target.parent.mkdir(parents=True, exist_ok=True); target.write_text('broker metadata')
         actual = module._read
-        def checked(root, name, *args):
+        def checked(root, name, *args, **kwargs):
             self.assertFalse(module._omitted(name, [metadata]), 'omitted bytes read')
-            return actual(root, name, *args)
+            return actual(root, name, *args, **kwargs)
         with patch('auto_workspace._read', side_effect=checked):
             workspace = self.manager.ensure(self.root, 'project', 'omitted', metadata_paths=[metadata])
         checkout = Path(workspace['path'])
@@ -197,11 +197,11 @@ class WorkspaceTests(unittest.TestCase):
         fd = os.open(os.fsencode(self.root) + b'/bad-\xff', os.O_CREAT | os.O_WRONLY, 0o600); os.close(fd)
         self.assertEqual('unsupported_filename', capabilities(self.root)['reason'])
 
-    def test_source_change_during_capture_retries_without_cleanup(self):
+    def test_source_change_during_capture_cleans_unpublished_stage_and_can_retry(self):
         actual = module._read; changed = False
-        def racing(root, name, *args):
+        def racing(root, name, *args, **kwargs):
             nonlocal changed
-            result = actual(root, name, *args)
+            result = actual(root, name, *args, **kwargs)
             if root == self.root and not changed:
                 changed = True; (self.root / 'README.md').write_text('concurrent USER edit')
             return result
@@ -209,9 +209,50 @@ class WorkspaceTests(unittest.TestCase):
             self.manager.ensure(self.root, 'project', 'race')
         self.assertEqual('project_changed', caught.exception.code)
         self.assertFalse((self.manager.home / 'project/race').exists())
-        self.assertTrue(list((self.manager.home / 'project').glob('.race-capture-*')))
+        self.assertFalse(list((self.manager.home / 'project').glob('.race-capture-*')))
         workspace = self.manager.ensure(self.root, 'project', 'race')
         self.assertEqual('concurrent USER edit', (Path(workspace['path']) / 'README.md').read_text())
+
+    def test_large_file_snapshot_and_export_skip_text_buffer(self):
+        data = b'Z' * (2 * module.COPY_CHUNK + 101)
+        original = self.root / 'large.bin'
+        original.write_bytes(data)
+        workspace = self.manager.ensure(self.root, 'project', 'large')
+        checkout = Path(workspace['path'])
+        self.assertEqual(data, (checkout.parent / 'baseline/large.bin').read_bytes())
+        (checkout / 'large.bin').write_bytes(data + b'plus')
+        real = module._read
+        def reads(root, name, *args, **kwargs):
+            if name == 'large.bin':
+                self.assertFalse(kwargs.get('collect'))
+            return real(root, name, *args, **kwargs)
+        with patch.object(module, '_read', side_effect=reads):
+            result = self.manager.diff(workspace)
+        change = next(c for c in result['changes'] if c['path'] == 'large.bin')
+        self.assertTrue(change['binary_or_large'])
+        self.assertEqual(data+b'plus', (Path(result['artifact_directory'])/'after/large.bin').read_bytes())
+
+    def test_disk_space_error_cleans_only_owned_stage(self):
+        import errno
+        from types import SimpleNamespace
+        self.manager.ensure(self.root, 'project', 'published')
+        with patch.object(module.shutil, 'disk_usage', return_value=SimpleNamespace(free=0)):
+            with self.assertRaises(AutoError) as low:
+                self.manager.ensure(self.root, 'project', 'preflight')
+        self.assertEqual('snapshot_space', low.exception.code)
+        real = module._read
+        def full(root, name, *args, **kwargs):
+            result = real(root, name, *args, **kwargs)
+            if kwargs.get('outputs'):
+                raise OSError(errno.ENOSPC, 'synthetic disk full')
+            return result
+        with patch.object(module, '_read', side_effect=full):
+            with self.assertRaises(AutoError) as caught:
+                self.manager.ensure(self.root, 'project', 'space')
+        self.assertEqual('snapshot_space', caught.exception.code)
+        parent = self.manager.home/'project'
+        self.assertFalse(list(parent.glob('.space-capture-*')))
+        self.assertTrue((parent/'published/workspace.json').is_file())
 
     def test_existing_baseline_tampering_rejected_without_recapture(self):
         workspace = self.manager.ensure(self.root, 'project', 'tamper')

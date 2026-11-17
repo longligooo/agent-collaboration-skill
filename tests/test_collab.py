@@ -96,6 +96,12 @@ class CollaborationCliTest(unittest.TestCase):
         )
         return result["document"]
 
+    def test_listener_cli_invalid_thread_preserves_json_error_and_exit_two(self):
+        error = self.run_cli("listener-plan", "--root", str(self.root), "--thread-id", "missing",
+                             "--agent", "dev", "--client", "cursor", "--peer", "other", expected=2)
+        self.assertEqual("ERROR", error["result"])
+        self.assertIn("thread manifest", error["error"])
+
     def test_codex_publish_notice_is_gated_deduplicated_and_best_effort(self):
         import argparse
         import contextlib
@@ -153,6 +159,16 @@ class CollaborationCliTest(unittest.TestCase):
             self.assertEqual(('PUBLISHED', 'unavailable'), (result['result'], result['codex_notice']))
             self.assertEqual('already_attempted', publish(failed)['codex_notice'])
             self.assertEqual(failed, collab.inspect_inbox(self.root, recipient, thread)['results'][0]['message']['message_id'])
+            with manual_ingress.database(self.root) as db:
+                db.execute("UPDATE participant_clients SET observed_at='2000-01-01T00:00:00+00:00'")
+                self.assertEqual({}, client_presence.fresh_clients(db, (sender, recipient)))
+            queue.side_effect = None
+            queue.return_value = 'queued'
+            self.assertEqual('queued', publish(str(uuid.uuid4()))['codex_notice'])
+            before = queue.call_count
+            client_presence.report(self.root, recipient, 'cursor')
+            self.assertNotIn('codex_notice', publish(str(uuid.uuid4())))
+            self.assertEqual(before, queue.call_count)
 
     def test_full_publish_inspect_and_acknowledge_flow(self):
         self.initialize()

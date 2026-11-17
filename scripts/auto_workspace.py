@@ -4,11 +4,14 @@ Git is used only for names/identity, never checkout, filters, status, or patches
 Capabilities is metadata-only; ensure captures bytes after task approval.
 """
 from __future__ import annotations
+from contextlib import ExitStack
 import difflib
+import errno
 import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import threading
@@ -20,6 +23,8 @@ import auto_process
 from auto_model import AutoError, identifier
 
 MAX_OUTPUT = 4 * 1024 * 1024
+COPY_CHUNK = 1024 * 1024
+MAX_PATCH_INPUT = 256 * 1024
 MAX_FILES = 4096
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
@@ -162,7 +167,7 @@ def _regular(path):
     return st
 
 
-def _read(root, name, expected=None, *, private=False):
+def _read(root, name, expected=None, *, private=False, collect=False, outputs=()):
     path = _safe(root, name); before = _regular(path)
     if private and before.st_nlink != 1:
         _error('unsafe_workspace', 'isolated content must not have hardlink aliases')
@@ -173,11 +178,59 @@ def _read(root, name, expected=None, *, private=False):
         opened = os.fstat(stream.fileno())
         if not stat.S_ISREG(opened.st_mode) or (private and opened.st_nlink != 1) or _opened_identity(opened) != _opened_identity(before):
             _error('project_changed', 'file identity changed during capture')
-        data = stream.read()
+        executable = bool(before.st_mode & 0o111)
+        if collect and before.st_size > MAX_PATCH_INPUT:
+            _error('project_changed', 'file grew while generating text diff')
+        digest, count = hashlib.sha256(), 0
+        data = bytearray() if collect else None
+        with ExitStack() as stack:
+            destinations = []
+            for output, preserve_exec, writable in outputs:
+                output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                mode = (0o600 if writable else 0o400) | (0o100 if preserve_exec and executable else 0)
+                dest_fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+                destinations.append(stack.enter_context(os.fdopen(dest_fd, 'wb')))
+            while chunk := stream.read(COPY_CHUNK):
+                count += len(chunk)
+                if count > before.st_size:
+                    _error('project_changed', 'file grew during capture')
+                digest.update(chunk)
+                if data is not None:
+                    data.extend(chunk)
+                for dest in destinations:
+                    dest.write(chunk)
+            for dest in destinations:
+                dest.flush()
+                os.fsync(dest.fileno())
         after = os.fstat(stream.fileno())
-    if _opened_identity(after) != _opened_identity(before) or _opened_identity(path.lstat()) != _opened_identity(before):
+    if (count != before.st_size or _opened_identity(after) != _opened_identity(before)
+            or _opened_identity(path.lstat()) != _opened_identity(before)):
         _error('project_changed', 'file changed during capture')
-    return data, bool(before.st_mode & 0o111)
+    if data is not None:
+        return bytes(data)
+    return {'sha256': digest.hexdigest(), 'size': count, 'executable': executable}
+
+
+def _check_space(directory, payload_bytes):
+    if shutil.disk_usage(directory).free < payload_bytes + MAX_OUTPUT + 65536:
+        _error('snapshot_space', 'insufficient space for the isolated snapshot or export')
+
+
+def _rethrow_space(exc):
+    if exc.errno in {errno.ENOSPC, getattr(errno, 'EDQUOT', -1)} or getattr(exc, 'winerror', None) in {39, 112}:
+        _error('snapshot_space', 'snapshot or export ran out of available space')
+
+
+def _discard_stage(stage):
+    if stage is None or not stage.exists():
+        return
+    def clear_readonly(func, path, error):
+        if (os.name != 'nt' or not isinstance(error[1], PermissionError)
+                or auto_process.is_unsafe_link(Path(path))):
+            raise error[1]
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    shutil.rmtree(stage, onerror=clear_readonly)
 
 
 def _index_identity(root):
@@ -334,8 +387,7 @@ def _scan(root):
             relative = (Path(directory) / name).relative_to(root).as_posix()
             relative = _name(relative)
             path = _safe(root, relative); st = _regular(path)
-            data, executable = _read(root, relative, _fingerprint(st), private=True)
-            entries[relative] = {'sha256': _hash(data), 'size': len(data), 'executable': executable}
+            entries[relative] = _read(root, relative, _fingerprint(st), private=True)
     return dict(sorted(entries.items()))
 
 
@@ -402,6 +454,7 @@ class WorkspaceManager:
         lock = auto_process.AdvisoryLock(parent / ('.' + task_id + '.lock'))
         with self._lock:
             lock.acquire()
+            stage = None
             try:
                 loaded = self._load(root, project_id, task_id)
                 if loaded is not None:
@@ -411,21 +464,20 @@ class WorkspaceManager:
                     _scan(existing / 'checkout')  # Reject persisted aliases before another provider gets cwd.
                     return self.describe(root, project_id, task_id)
                 before = _inventory(root, metadata_paths)
-                stage = parent / ('.' + task_id + '-capture-' + uuid.uuid4().hex)
-                stage.mkdir(mode=0o700)
+                _check_space(parent, 2 * before['bytes'] + 65536)
+                candidate = parent / ('.' + task_id + '-capture-' + uuid.uuid4().hex)
+                candidate.mkdir(mode=0o700)
+                stage = candidate
                 (stage / 'baseline').mkdir(mode=0o700); (stage / 'checkout').mkdir(mode=0o700)
                 entries = {}
                 for name, fingerprint in before['entries'].items():
-                    data, executable = _read(root, name, fingerprint)
-                    entries[name] = {'sha256': _hash(data), 'size': len(data), 'executable': executable}
-                    _write(stage / 'baseline' / name, data, 0o500 if executable else 0o400)
-                    _write(stage / 'checkout' / name, data, 0o700 if executable else 0o600)
+                    entries[name] = _read(root, name, fingerprint, outputs=(
+                        (stage / 'baseline' / name, True, False), (stage / 'checkout' / name, True, True)))
                 # Two matching metadata/name passes plus a complete source hash pass.
                 if _inventory(root, metadata_paths) != before:
                     _error('project_changed', 'source names/index/HEAD/metadata changed during capture')
                 for name, fingerprint in before['entries'].items():
-                    data, executable = _read(root, name, fingerprint)
-                    if _hash(data) != entries[name]['sha256'] or executable != entries[name]['executable']:
+                    if _read(root, name, fingerprint) != entries[name]:
                         _error('project_changed', 'source content changed during capture')
                 if _inventory(root, metadata_paths) != before:
                     _error('project_changed', 'source changed before publication')
@@ -445,9 +497,16 @@ class WorkspaceManager:
                 _write(stage / 'workspace.json', encoded, 0o400)
                 if directory.exists(): _error('workspace_conflict', 'snapshot target appeared during capture')
                 os.rename(stage, directory)  # one complete directory, under owned advisory lock
+                stage = None
                 return self.describe(root, project_id, task_id)
+            except OSError as exc:
+                _rethrow_space(exc)
+                raise
             finally:
-                lock.close()
+                try:
+                    _discard_stage(stage)
+                finally:
+                    lock.close()
 
     def diff(self, workspace):
         loaded = self._load(workspace['project_root'], workspace['project_id'], workspace['task_id'])
@@ -465,12 +524,15 @@ class WorkspaceManager:
             change = {'path': name, 'kind': 'added' if old is None else 'deleted' if new is None else 'modified',
                       'before': old, 'after': new}
             changes.append(change)
-            old_data = _read(directory / 'baseline', name, private=True)[0] if old else b''
-            new_data = _read(directory / 'checkout', name, private=True)[0] if new else b''
+            if sum(row['size'] for row in (old, new) if row) > MAX_PATCH_INPUT:
+                change['binary_or_large'] = True
+                continue
+            old_data = _read(directory / 'baseline', name, private=True, collect=True) if old else b''
+            new_data = _read(directory / 'checkout', name, private=True, collect=True) if new else b''
             if _hash(old_data) != (old or {}).get('sha256', _hash(b'')) or _hash(new_data) != (new or {}).get('sha256', _hash(b'')):
                 _error('project_changed', 'snapshot output changed while generating diff')
             try:
-                if b'\0' in old_data + new_data or len(old_data) + len(new_data) > 256 * 1024:
+                if b'\0' in old_data or b'\0' in new_data:
                     raise UnicodeError()
                 def lines(data):
                     parts = data.decode('utf-8').split('\n')
@@ -498,6 +560,7 @@ class WorkspaceManager:
         bundle = exports / _hash(raw)
         lock = auto_process.AdvisoryLock(directory / '.exports.lock')
         lock.acquire()
+        stage = None
         try:
             if bundle.exists():
                 if auto_process.is_unsafe_link(bundle) or _load_json(bundle / 'manifest.json')[1] != raw:
@@ -506,20 +569,30 @@ class WorkspaceManager:
                 if _scan(bundle / 'after') != expected:
                     _error('workspace_conflict', 'retained export bytes differ')
             else:
-                stage = directory / ('.export-' + uuid.uuid4().hex)
-                stage.mkdir(mode=0o700); (stage / 'after').mkdir(mode=0o700)
+                _check_space(exports, sum(change['after']['size'] for change in changes if change['after']))
+                candidate = directory / ('.export-' + uuid.uuid4().hex)
+                candidate.mkdir(mode=0o700)
+                stage = candidate
+                (stage / 'after').mkdir(mode=0o700)
                 for change in changes:
                     if change['after'] is None: continue
-                    data, executable = _read(directory / 'checkout', change['path'], private=True)
-                    if _hash(data) != change['after']['sha256'] or executable != change['after']['executable']:
+                    copied = _read(directory / 'checkout', change['path'], private=True, outputs=(
+                        (stage / 'after' / change['path'], True, False),))
+                    if copied != change['after']:
                         _error('project_changed', 'output changed during export copy')
-                    _write(stage / 'after' / change['path'], data, 0o500 if executable else 0o400)
                 if _scan(directory / 'checkout') != current:
                     _error('project_changed', 'output changed before export publication')
                 _write(stage / 'manifest.json', raw, 0o400)
                 os.rename(stage, bundle)
+                stage = None
+        except OSError as exc:
+            _rethrow_space(exc)
+            raise
         finally:
-            lock.close()
+            try:
+                _discard_stage(stage)
+            finally:
+                lock.close()
         ref = bundle / 'manifest.json'
         shown, names = [], []
         for change in changes:

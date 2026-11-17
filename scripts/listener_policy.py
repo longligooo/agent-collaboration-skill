@@ -14,14 +14,17 @@ def plan(root, thread, agent, client, peers, *, self_interval=5, relay_interval=
         raise collab.CollaborationError("listener intervals and idle timeout must be positive")
     client = collab.validate_id(client, "client")
     peers = list(dict.fromkeys(peers))
-    rows = session_feedback.targets(root, thread)["targets"]
-    observed = {t["participant"]: t.get("client") for t in rows}
-    bound = sum(t["participant"] == agent and t["vendor"] == "codex" for t in rows) == 1
-    direct = [p for p in peers if client == "codex" and observed.get(p) == "codex"]
-    monitored = [p for p in peers if p not in direct]
-    mode = ("shared_relay" if client == "codex" else "self") if monitored else ("direct" if direct else "none")
+    roster_info = session_feedback.targets(root, thread, include_routing=True)
+    observed = roster_info["routing_clients"]
+    bound = sum(t["participant"] == agent and t["vendor"] == "codex" for t in roster_info["targets"]) == 1
+    codex_peers = [p for p in peers if client == "codex" and observed.get(p) == "codex"]
+    direct = codex_peers if bound else []
+    # Missing direct binding is a setup mismatch, not permission for a second watcher.
+    blocked = [] if bound else codex_peers
+    monitored = [p for p in peers if p not in direct and p not in blocked]
+    mode = ("shared_relay" if client == "codex" else "self") if monitored else ("direct" if direct else "binding_required" if blocked else "none")
     return {"thread_id": thread, "participant": agent, "mode": mode, "direct_peers": direct,
-            "poll_peers": monitored, "unknown_peers": [p for p in peers if not observed.get(p)],
+            "poll_peers": monitored, "binding_required_peers": blocked, "unknown_peers": [p for p in peers if not observed.get(p)],
             "interval_minutes": (relay_interval if mode == "shared_relay" else self_interval if mode == "self" else None),
             "idle_minutes": idle_minutes, "relay_model": "luna" if mode == "shared_relay" else None,
             "unique_codex_binding": bound if client == "codex" else None}
@@ -47,7 +50,7 @@ def step(root, config, started_at, last_new_at, seen_message_id=None, *, complet
               "last_new_at": last.isoformat(), "seen_message_id": seen_message_id}
     if completed or (root / ".ai-collab/STOP").is_file() or (collab.thread_directory(root, thread) / "STOP").is_file():
         return {**result, "state": "stop", "reason": "closed_or_stopped"}
-    if config["mode"] in {"none", "direct"}:
+    if config["mode"] in {"none", "direct", "binding_required"}:
         return {**result, "state": "stop", "reason": "no_poll_peers"}
     for row in collab.inspect_inbox(root, agent, thread)["results"]:
         if row["decision"] not in {"NEW", "TERMINAL"}:

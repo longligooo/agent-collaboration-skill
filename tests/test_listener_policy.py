@@ -13,7 +13,8 @@ class ListenerPolicyTests(unittest.TestCase):
     @patch.object(policy.session_feedback, "targets", return_value={"targets": [
         {"participant": "me", "client": "codex", "vendor": "codex"},
         {"participant": "one", "client": "codex", "vendor": "listener"},
-        {"participant": "two", "client": "cursor", "vendor": "listener"}]})
+        {"participant": "two", "client": "cursor", "vendor": "listener"}],
+        "routing_clients": {"one": "codex", "two": "cursor"}})
     def test_route_relative_to_selected_peers(self, targets, manifest):
         root = Path(".")
         direct = policy.plan(root, "t", "me", "codex", ["one"])

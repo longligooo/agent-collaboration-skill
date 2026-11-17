@@ -110,11 +110,11 @@ When the human does name one, that participant may read the repository and may w
 
 They must not create, modify, or delete product code, configuration, or test files, including when a requested action says `IMPLEMENT`. They assign that work to another participant and check the result. Checking includes running the project's existing tests and recording the commands and results. Running tests does not allow the coordinator to edit those tests or any other product file, and it does not allow any participant to commit. No file setting can grant the coordinator permission to edit product code.
 
-After publishing the dispatch turn, tell each assignee. A participant id that already appears in a thread manifest in this repository, or that the human has already had use this skill, is a known collaborator. Anyone else is new.
+### Notify After Dispatch
 
-A new collaborator receives one opening prompt. The prompt tells them to use this skill, names the repository, thread id, and topic, and points them at `SKILL.md` and `inspect` for their own participant id. Write it in the conversation's primary language. When the human is talking to the coordinator, the coordinator gives each prompt to the human to paste into that collaborator's chat. When the coordinator is a subagent of the current session, the agent that started the thread delivers the prompts and does not ask the human to forward them.
+After publishing the dispatch turn, notify each assignee once through an authorized delivery channel. If a suitable direct channel is available, use it; if publication already queued the appropriate notice, do not send another. Queued means dispatched, not read. If the result is unknown, check the existing delivery before trying another channel. Ask the human to relay only if an authorized delivery path is unavailable or failure is confirmed. Do not infer permission to message someone from the formal signal alone.
 
-A known collaborator does not get an opening prompt. The human tells them that a new thread was assigned, naming the topic and thread id.
+Someone the human has already had use this skill or who appears in another manifest for the repository is a known collaborator. Send them the thread topic, ID, and requested action. For a new collaborator, include one onboarding prompt in the conversation's primary language: participant ID, repository, thread ID and topic, and the instruction to read `SKILL.md` and run `inspect` as themselves. Use the appropriate message once, not both a reminder and a separate introduction.
 
 ## Commits
 

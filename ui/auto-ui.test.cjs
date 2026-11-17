@@ -9,10 +9,10 @@ test('manual sources never become process activity and expire locally',()=>{cons
 // the served module. No DOM/browser, providers, processes or external requests.
 const vm=require('node:vm'),fs=require('node:fs');
 function harness(fetcher){
- const source=fs.readFileSync(require.resolve('./auto-ui.js'),'utf8').replace(/return \{configure,render,refresh,navigate,title,href,available,routeRecipients,deliveryLabel,paintActivity[^}]*\};/,'return {configure,render,refresh,navigate,title,href,available,routeRecipients,deliveryLabel,paintActivity,__test:{discoverAuth,disconnect,state,mutate,more,connect,composers,planDrafts,planView,chatView,getPending:()=>pendingMutation,authorize:()=>{token="fixture-only";csrf="fixture-csrf";authReady=true;},getAuth:()=>authReady}};');
- const sandbox={module:{exports:{}},fetch:(path,options)=>path.endsWith('/capabilities')?Promise.resolve(response({execution_workspace:{kind:'managed_snapshot',supported:true,requires_clean:false}})):fetcher(path,options),crypto:require('node:crypto').webcrypto,AbortController,setTimeout,clearTimeout,URLSearchParams,location:{hash:''},document:{querySelector:()=>null},confirm:()=>true};vm.runInNewContext(source,sandbox);
+ const source=fs.readFileSync(require.resolve('./auto-ui.js'),'utf8').replace(/return \{configure,render,refresh,navigate,title,href,available,routeRecipients,deliveryLabel,paintActivity[^}]*\};/,'return {configure,render,refresh,navigate,title,href,available,routeRecipients,deliveryLabel,paintActivity,threadFeedback,__test:{discoverAuth,disconnect,state,mutate,more,connect,composers,planDrafts,planView,chatView,getPending:()=>pendingMutation,authorize:()=>{token="fixture-only";csrf="fixture-csrf";authReady=true;},getAuth:()=>authReady}};');
+ const sandbox={module:{exports:{}},fetch:(path,options)=>path.endsWith('/capabilities')?Promise.resolve(response({execution_workspace:{kind:'managed_snapshot',supported:true,requires_clean:false}})):fetcher(path,options),crypto:require('node:crypto').webcrypto,AbortController,AbortSignal,queueMicrotask,setTimeout,clearTimeout,URLSearchParams,location:{hash:''},document:{querySelector:()=>null},confirm:()=>true};vm.runInNewContext(source,sandbox);
  const api=sandbox.module.exports;let current={name:'auto',projectId:'p',taskId:'a'};
- api.configure({h:(tag,props,...children)=>({tag,props,children:children.flat(Infinity)}),render:()=>{},route:()=>current,findProject:id=>({id,name:id}),avatar:()=>({}),uniqueHistory:thread=>thread.history||[],messageNode:entry=>({tag:'protocol-record',props:{},children:[entry.id]}),runningMessages:()=>[],threadHref:()=>''});
+ api.configure({h:(tag,props,...children)=>({tag,props,children:children.flat(Infinity),hidden:!!props?.hidden,replaceChildren(...nodes){this.children=nodes}}),render:()=>{},route:()=>current,findProject:id=>({id,name:id}),avatar:()=>({}),uniqueHistory:thread=>thread.history||[],messageNode:entry=>({tag:'protocol-record',props:{},children:[entry.id]}),runningMessages:()=>[],threadHref:()=>''});
  return {api,t:api.__test,setRoute:r=>current=r};
 }
 const response=(value,status=200)=>({ok:status>=200&&status<300,status,json:async()=>value});
@@ -97,3 +97,40 @@ test('foreground token guidance never promises background log recovery',()=>{
 });
 
 test('custom Codex configuration is usable but not authenticated',()=>{const ready={id:'codex',installed:true,auth_status:'configured',headless_status:'available',planning_isolation:'provider_read_only_profile'};assert(A.available(ready));assert(!A.available({...ready,id:'claude',planning_isolation:'model_tools_denied'}));assert(!A.available({...ready,unavailable_reason:'auth_unconfirmed'}));assert(!A.available({...ready,capabilities_status:'stale'}));});
+
+test('feedback composer keeps draft and offers reconnection for stale credentials only',async()=>{
+ for(const [status,code,reauth] of [[401,'unauthorized',true],[403,'csrf',true],[403,'invalid_origin',false]]){
+  const calls=[];
+  let expired=true;
+  const target={participant:'dev',vendor:'listener'};
+  const x=harness(async(path,options)=>{
+   calls.push({path,options});
+   if(path.endsWith('/session')) return response({enabled:true,csrf_token:'new-csrf'});
+   if(options.method==='POST') return expired?response({error:{code,message:'denied'}},status):response({status:'inbox'});
+   return response({targets:[target]});
+  });
+  x.setRoute({name:'thread',projectId:'p',threadId:'t'});
+  x.t.authorize();
+  const draw=()=>x.api.threadFeedback('p','t');
+  const settle=()=>new Promise(resolve=>setImmediate(resolve));
+  draw();await settle();
+  const composer=draw().children[0],box=composer.children[0];
+  box.value='@dev keep this draft';box.props.oninput();
+  await composer.children[1].props.onclick();
+  const updated=draw();
+  assert.equal(x.t.getAuth(),!reauth);
+  assert.equal(updated.children[0].children[0].children[0],'@dev keep this draft');
+  const form=updated.children.find(child=>child?.tag==='form');
+  assert.equal(!!form,reauth);
+  if(reauth){
+   expired=false;
+   form.props.onsubmit({preventDefault(){}});await settle();draw();await settle();
+   const after=draw().children[0];
+   await after.children[1].props.onclick();
+   const sent=calls.filter(c=>c.options.method==='POST');
+   assert.equal(sent.length,2);
+   assert.equal(sent[1].options.headers['X-Collab-CSRF'],'new-csrf');
+   assert.equal(JSON.parse(sent[1].options.body).body,'keep this draft');
+  }
+ }
+});

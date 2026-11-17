@@ -11,7 +11,7 @@ Coordinate agents through immutable Markdown turns and small JSON signals stored
 
 Read [references/protocol.md](references/protocol.md) before creating or processing a collaboration thread. Read [references/tickets.md](references/tickets.md) before writing a spec, writing a ticket, dispatching work, or opening a thread. Read [references/artifact-format.md](references/artifact-format.md) when writing a turn. Read [references/tool-adapters.md](references/tool-adapters.md) only when configuring a coding tool to discover this skill or monitor signals.
 
-When a turn's task comes from a ticket, read that ticket and the `spec.md` it cites before processing the turn. Apply [the role workflow](references/tickets.md#按角色执行任务): the coordinator clarifies human intent before dispatch and escalates material problems promptly; assignees ask the coordinator when requirements are unclear. Review implementation plans before edits and test cases before acceptance runs. These are collaboration rules; `scripts/collab.py` does not parse tickets or enforce these gates.
+When a turn's task comes from a ticket, read that ticket and the `spec.md` it cites before processing the turn. Apply [the role workflow](references/tickets.md#按角色执行任务): clarify intent before dispatch, flag material problems promptly, and ask the coordinator about unclear requirements. Use risk to choose which plans and test cases need advance review; retain code review and the ticket's required verification. These are collaboration rules; `scripts/collab.py` does not parse tickets or enforce these gates.
 
 Use `python scripts/collab.py --help` for deterministic workspace operations. The script uses only the Python standard library.
 
@@ -30,11 +30,11 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - For an explicitly enabled coding profile, role-authorized `task-update` operations may write shared task metadata after checking current code/messages. This does not permit product edits or commits.
 - A coordinator exists only when the human passes `--coordinator`. That participant must not create, modify, or delete product code, configuration, or test files. They may run the project's existing tests and write their own turns, signals, and state file. With no `--coordinator`, no participant has that restriction.
 - Do not run `git commit` or `git push` unless the human explicitly requested that commit in the current instruction. Publishing a turn is not a commit.
-- Write the human's requirements as a spec and tickets before dispatch. One requirement round may become several tickets. Each ticket locks exactly one thing that can be accepted on its own.
+- Clarify or do brief read-only investigation in the current conversation without a new ticket. Before formal dispatch or a new collaboration thread, write or reuse a spec and ticket that define one independently verifiable outcome.
 - Do not start implementation, and do not run `collab.py init`, unless a ticket already covers that work. Put the ticket path in the thread objective.
 - Do not parse tickets into signals or the turn state machine. Turns stay immutable. Ticket status may change. Ticket comments are append-only.
 - Do not move a resolved ticket back to in progress. A new problem gets a new ticket number.
-- A ticket stays blocked until every ticket named in `Blocked by` is `resolved`. `wontfix` does not lift that block.
+- A dependency blocks only the work it affects. Proceed with independent work; verify the stated dependency condition before dependent work or final acceptance. See [dependency rules](references/tickets.md#blocked-by).
 - `--topic` is the readable thread title. Summarize it in the primary language of the human's conversation. A Chinese conversation gets a Chinese title. Keep `thread_id` as a stable ASCII slug.
 - A new collaborator gets one opening prompt that tells them to use this skill on the new thread. A known collaborator gets no opening prompt.
 
@@ -94,9 +94,7 @@ After the dispatch turn is published, tell every participant who must act. A col
 
 For each new collaborator, write a separate opening prompt in the conversation's primary language. The prompt's job is to make that person use this skill and join this thread. Include their participant name, the repository path, the thread id, the topic, and the instruction to read `SKILL.md` and run `inspect` as themselves. Tell them not to commit unless the human explicitly asks.
 
-When the human is talking to the coordinator directly, give the human those prompts and ask them to paste each one into that collaborator's chat. When the coordinator is a subagent of the current session, the agent that started the thread delivers the prompts. Do not ask the human to forward them.
-
-For a known collaborator, do not write an opening prompt. Ask the human to tell that person a new collaboration thread was assigned to them, and name the topic and thread id.
+Use the [notification rule](references/protocol.md#notify-after-dispatch). If an authorized direct channel is available, send the opening prompt there once; for a known collaborator, send only the topic, thread ID, and requested action. If an onboarding prompt is required for a new collaborator, include it in the single notification. Ask the human to relay only when an authorized delivery path is unavailable or confirmed to have failed.
 
 A Chinese opening prompt for a new collaborator looks like this:
 
@@ -150,7 +148,7 @@ python scripts/collab.py new-turn \
   --title "Configuration redesign challenge"
 ```
 
-Fill the generated sections before publishing. Use stable finding IDs such as `P1-1` across rounds. Do not mark a finding closed from prose alone when code, tests, or runtime state can verify it.
+Keep only the generated sections needed for the turn and remove unused placeholders before publishing. For a routine handoff, record the outcome, evidence, unverified items, and next action if any. Use stable finding IDs such as `P1-1` across rounds. Do not mark a finding closed from prose alone when code, tests, or runtime state can verify it.
 
 ## Tickets
 

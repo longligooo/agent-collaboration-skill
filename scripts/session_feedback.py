@@ -25,14 +25,16 @@ def _target(binding, thread_id):
         return False
 
 
-def targets(root, thread_id):
+def targets(root, thread_id, *, include_routing=False):
     manifest = collab.load_manifest(root, thread_id)
     path = manual_ingress.storage_path(root)
     with_roster = []
-    clients = {}
+    clients, routing = {}, {}
     if path.is_file():
         with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
             clients = client_presence.fresh_clients(db, manifest['participants'])
+            if include_routing:
+                routing = client_presence.routing_clients(db, manifest['participants'])
             for (binding_id,) in db.execute('SELECT id FROM bindings ORDER BY id'):
                 try:
                     b = manual_ingress.binding_from(db, binding_id, root)
@@ -45,7 +47,10 @@ def targets(root, thread_id):
                        for name in manifest['participants'] if name not in direct)
     for target in with_roster:
         target.update(clients.get(target['participant'], {}))
-    return {'targets': with_roster}
+    result = {'targets': with_roster}
+    if include_routing:
+        result['routing_clients'] = routing
+    return result
 
 
 def _queue_codex(executable, session_id, message):
@@ -67,8 +72,12 @@ def notify_published(root, signal):
     thread, sender, recipient = signal['thread_id'], signal['from'], signal['to']
     identity = (thread, sender, recipient, signal['message_id'])
     with manual_ingress.database(root) as db:
-        clients = client_presence.fresh_clients(db, (sender, recipient))
-        if any(clients.get(name, {}).get('client') != 'codex' for name in (sender, recipient)):
+        clients = client_presence.routing_clients(db, (sender, recipient))
+        if clients.get(sender) != 'codex':
+            return None
+        if clients.get(recipient) is None:
+            return 'recipient_client_unconfirmed'
+        if clients[recipient] != 'codex':
             return None
         matches = []
         for (binding_id,) in db.execute('SELECT id FROM bindings ORDER BY id'):

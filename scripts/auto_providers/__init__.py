@@ -210,12 +210,13 @@ class ProviderRegistry:
         self.path = os.environ.get("PATH", "") if path is None else str(path)
         self.timeout, self.max_output, self.ttl = timeout, max_output, ttl
         self._cache = None
+        self._cache_from_disk = False
         self._executables = {}
         self._sources = {}
         self._env_signatures = {}
         self._codex_provider_binding = None
         self._checked = 0.0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def _env(self, provider=None):
         from .environment import cli_environment
@@ -380,6 +381,7 @@ class ProviderRegistry:
             if set(by_id) != set(ACTIVE_PROVIDERS):
                 return
             self._cache = [by_id[provider] for provider in ACTIVE_PROVIDERS]
+            self._cache_from_disk = True
             self._checked = time.monotonic() - max(0.0, time.time() - checked)
         except (OSError, ValueError, TypeError, RecursionError):
             return
@@ -399,6 +401,10 @@ class ProviderRegistry:
                 self._load_cache()
             if refresh:
                 records = []
+                self._executables.clear()
+                self._sources.clear()
+                self._env_signatures.clear()
+                self._codex_provider_binding = None
                 with tempfile.TemporaryDirectory(prefix="collab-provider-probe-") as cwd:
                     for provider in ACTIVE_PROVIDERS:
                         executable = shutil.which(provider, path=self.path)
@@ -431,6 +437,7 @@ class ProviderRegistry:
                                     record["catalog_status"] = "stale"
                         records.append(record)
                 self._cache, self._checked = records, time.monotonic()
+                self._cache_from_disk = False
                 self._save_cache()
             if self._cache is None:
                 undiscovered = [{"id": p, "installed": shutil.which(p, path=self.path) is not None,
@@ -475,29 +482,39 @@ class ProviderRegistry:
             raise ProviderError("invalid_model")
         if not isinstance(prompt, str) or not prompt or len(prompt.encode()) > 1024 * 1024:
             raise ProviderError("invalid_prompt")
-        records = self.discover()
-        record = next(r for r in records if r["id"] == provider_id)
+        with self._lock:
+            records = self.discover()
+            if self._cache_from_disk:
+                # Display records from another process do not prove launch identity.
+                records = self.discover(refresh=True)
+            record = next(r for r in records if r["id"] == provider_id)
+            checked = self._checked
+            runtime = self._executables.get(provider_id)
+            source_identity = self._sources.get(provider_id)
+            signature = self._env_signatures.get(provider_id)
+            provider_binding = self._codex_provider_binding
         supported = {"claude": "model_tools_denied", "codex": "provider_read_only_profile"}
         if record["planning_isolation"] != supported.get(provider_id):
             raise ProviderError("isolation_unverified")
-        if time.monotonic() - self._checked > self.ttl:
+        if time.monotonic() - checked > self.ttl:
             raise ProviderError("discovery_stale")
         if (record["auth_status"] != "authenticated"
                 and not (provider_id == "codex" and record["auth_status"] == "configured"
-                         and self._codex_provider_binding)):
+                         and provider_binding)):
             raise ProviderError("auth_unconfirmed")
+        if runtime is None or source_identity is None or signature is None:
+            raise ProviderError("isolation_unverified")
         launch_env = self._env(provider_id)
-        if (provider_id in self._env_signatures
-                and self._env_signature(provider_id, launch_env) != self._env_signatures[provider_id]):
+        if self._env_signature(provider_id, launch_env) != signature:
             raise ProviderError("provider_configuration_changed")
-        executable, checked_stat = self._executables[provider_id]
+        executable, checked_stat = runtime
         try:
             actual = Path(executable).stat()
             current = shutil.which(provider_id, path=self.path)
             if current is None:
                 raise ProviderError("executable_changed")
             source = Path(current).resolve()
-            checked_source, source_stat = self._sources[provider_id]
+            checked_source, source_stat = source_identity
             source_now = source.stat()
             if (str(source) != checked_source or str(self._resolve_executable(provider_id, source)) != executable
                     or any(getattr(actual, key) != getattr(checked_stat, key)
@@ -512,12 +529,12 @@ class ProviderRegistry:
         if provider_id == "codex":
             from .codex import fixed_startup_argv
             names = self._codex_mcp_inventory(executable, directory, launch_env, phase)
-            if self._env_signature(provider_id, launch_env) != self._env_signatures.get(provider_id):
+            if self._env_signature(provider_id, launch_env) != signature:
                 raise ProviderError("provider_configuration_changed")
             return LaunchSpec(fixed_startup_argv(executable, phase, directory, disabled_mcp=names), prompt.encode("utf-8"),
                               directory, launch_env, output_format="codex-app-server",
                               transport={"phase": phase, "model_id": model_id,
-                                         "provider_binding": self._codex_provider_binding, "disabled_mcp": names})
+                                         "provider_binding": provider_binding, "disabled_mcp": names})
         # The trusted executable and managed policy are not sandboxed here.
         # These flags remove model-accessible execution/delegation/MCP tools.
         sandboxed = phase == "worker" and record.get("execution_status") == "sandbox_required"

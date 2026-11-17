@@ -27,17 +27,23 @@ def report(root, participant, client, thread_id=None):
             (participant, client, now))
 
 
-def fresh_clients(db, participants, *, now=None):
+def _observations(db, participants):
     if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='participant_clients'").fetchone():
         return {}
+    return {p: row for p in participants
+            if (row := db.execute("SELECT client, observed_at FROM participant_clients WHERE participant=?",
+                                  (p,)).fetchone())}
+
+
+def routing_clients(db, participants):
+    """An explicit client choice is replaced on switch, not expired like presence."""
+    return {p: row[0] for p, row in _observations(db, participants).items()}
+
+
+def fresh_clients(db, participants, *, now=None):
     now = now or datetime.now(timezone.utc)
     result = {}
-    for participant in participants:
-        row = db.execute("SELECT client, observed_at FROM participant_clients WHERE participant=?",
-                         (participant,)).fetchone()
-        if not row:
-            continue
-        client, seen = row
+    for participant, (client, seen) in _observations(db, participants).items():
         observed = datetime.fromisoformat(seen)
         expiry = observed + FRESHNESS
         if observed <= now < expiry:

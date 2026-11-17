@@ -11,6 +11,63 @@ import test_auto_runtime as runtime_fixture
 SCRIPT = runtime_fixture.SCRIPT
 FakeProviders = runtime_fixture.FakeProviders
 
+class CachedProviderTests(unittest.TestCase):
+    def test_display_cache_is_revalidated_on_first_launch_in_new_process(self):
+        from unittest.mock import patch
+        from auto_providers import ProviderRegistry
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root / 'fake-exe'
+            executable.write_text('not launched')
+            cache = root / 'discovery.json'
+            probes = []
+            def claude(self, path, cwd, record):
+                probes.append(self)
+                record.update(auth_status='authenticated', planning_isolation='model_tools_denied')
+            with patch.object(ProviderRegistry, '_cache_path', return_value=cache), patch(
+                    'auto_providers.shutil.which', side_effect=lambda name, **_: str(executable) if name=='claude' else None), patch.object(
+                    ProviderRegistry, '_resolve_executable', side_effect=lambda _, path: path), patch.object(
+                    ProviderRegistry, '_env_signature', return_value=b'verified'), patch.object(ProviderRegistry, '_claude', claude):
+                original = ProviderRegistry()
+                original.discover(refresh=True)
+                restarted = ProviderRegistry()
+                display = next(p for p in restarted.discover() if p['id']=='claude')
+                self.assertEqual('authenticated', display['auth_status'])
+                self.assertEqual([original], probes)
+                launch = restarted.build_launch('claude', prompt='fixture', cwd=tmp)
+                self.assertEqual(str(executable.resolve()), launch.argv[0])
+                self.assertEqual([original, restarted], probes)
+                restarted.build_launch('claude', prompt='fixture', cwd=tmp)
+                self.assertEqual([original, restarted], probes)
+
+
+    def test_restarted_custom_codex_requires_fresh_private_binding(self):
+        from unittest.mock import patch
+        from auto_providers import ProviderRegistry
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root / 'fake-codex'
+            executable.write_text('not launched')
+            cache = root / 'discovery.json'
+            bindings = []
+            def codex(self, path, cwd, record):
+                binding = {'fixture': len(bindings)}
+                bindings.append(binding)
+                self._codex_provider_binding = binding
+                record.update(auth_status='configured', planning_isolation='provider_read_only_profile')
+            with patch.object(ProviderRegistry, '_cache_path', return_value=cache), patch(
+                    'auto_providers.shutil.which', side_effect=lambda name, **_: str(executable) if name=='codex' else None), patch.object(
+                    ProviderRegistry, '_resolve_executable', side_effect=lambda _, path: path), patch.object(
+                    ProviderRegistry, '_env_signature', return_value=b'verified'), patch.object(
+                    ProviderRegistry, '_codex_mcp_inventory', return_value=()), patch.object(ProviderRegistry, '_codex', codex):
+                ProviderRegistry().discover(refresh=True)
+                restarted = ProviderRegistry()
+                self.assertEqual('configured', next(row for row in restarted.discover() if row['id']=='codex')['auth_status'])
+                self.assertEqual([{'fixture': 0}], bindings)
+                launch = restarted.build_launch('codex', prompt='fixture', cwd=tmp)
+                self.assertEqual({'fixture': 1}, launch.transport['provider_binding'])
+
+
 class PlanningRegressionTests(unittest.TestCase):
     setUp = runtime_fixture.RuntimeTests.setUp
     create = runtime_fixture.RuntimeTests.create

@@ -103,6 +103,11 @@ function chatView(r,s){
 function runtimePerson(r,t,p,i){const {h}=ctx,k=key(r)+'/'+p.participant_id;let d=changes.get(k);if(!d){d={provider_id:p.provider_id,model_id:p.model_id};changes.set(k,d);}const queued=arr(t.queued_provider_changes).find(c=>c.participant_id===p.participant_id);return h('section',{class:'runtime-person'},h('div',{class:'participant'},ctx.avatar(p.identity||ctx.identityFor?.(t.project_id,p.participant_id)||p.participant_id,p.participant_id,'sm'),h('strong',{},p.participant_id)),h('small',{},'当前：'+p.provider_id+' / '+(p.model_id||'工具默认')),providerFields('auto-runtime-'+i,d,patch=>Object.assign(d,patch),terminal(t)||!t.thread_id),button('申请更换',()=>mutate(r,endpoint(r)+'/participants/'+encodeURIComponent(p.participant_id)+'/provider',{expected_revision:t.revision,...d}),terminal(t)||!t.thread_id||!available(provider(d.provider_id))),!t.thread_id?h('p',{class:'auto-help'},'正式线程建立后可申请更换；确认前请编辑团队方案。'):queued?h('p',{class:'auto-gate'},'待安全边界生效；身份不变。'):null);}
 function paintActivity(){const r=ctx?.route();if(r?.name!=='auto')return;const slot=document.querySelector('.auto-live-messages'),s=state(r);if(slot&&s.task)slot.replaceChildren(...ctx.runningMessages(activityThread(r,s)));}
 const feedbackState=new Map();
+function invalidateFeedbackAuth(e, revision){
+ if(revision!==connectionRevision || !(e.status===401 || (e.status===403 && e.code==='csrf')))return false;
+ connectionRevision++;authReady=false;token='';csrf='';authError=e.message;
+ return true;
+}
 const feedbackTargetId=t=>t.binding_id||'listener:'+t.participant;
 function feedbackClientLabel(t){
  if(!t.client||!(Date.parse(t.client_expires_at)>Date.now()))return '客户端未知';
@@ -123,8 +128,9 @@ function threadFeedback(projectId,threadId){
  async function loadTargets(){
   if(s.loading)return;
   s.loading=true;
+  const revision=connectionRevision;
   try{s.targets=arr((await request(path,{signal:AbortSignal.timeout(10000)})).targets);s.loadedAt=Date.now();s.loadError='';}
-  catch(e){s.loadError=e.message;}
+  catch(e){if(!invalidateFeedbackAuth(e,revision))s.loadError=e.message;}
   finally{
    s.loading=false;
    const focused=document.activeElement?.id===id,caret=focused?document.activeElement.selectionStart:0;
@@ -178,13 +184,16 @@ function threadFeedback(projectId,threadId){
   const mention=parseFeedbackMention(s.draft,s.targets||[],s.selected);
   if(!s.pending&&!mention)return;
   const attempt=s.pending||{key:crypto.randomUUID(),body:mention.target.vendor==='listener'?{participant:mention.target.participant,body:mention.body}:{binding_id:mention.target.binding_id,expected_revision:mention.target.revision,body:mention.body}};
+  const revision=connectionRevision, retrying=!!s.pending;
   s.pending=attempt;s.busy=true;s.notice='';paint();
   try{
    const result=await request(path,{method:'POST',body:attempt.body,idempotency:attempt.key,signal:AbortSignal.timeout(24000)});
    s.pending=null;s.draft='';s.selected='';
    s.notice=result.status==='inbox'?'已放入协作者收件箱，等候其监听读取。':result.status==='queued'?'已发送到会话队列，尚未确认已读。':'投递结果未知，请在目标会话确认；不会自动重发。';
   }catch(e){
-   if(e.status&&e.status<500&&e.status!==408)s.pending=null;
+   const reconnect=invalidateFeedbackAuth(e,revision);
+   if(e.status&&e.status<500&&e.status!==408&&!(reconnect&&retrying))s.pending=null;
+   if(reconnect){s.loadError='';s.targets=null;s.notice=e.message;return;}
    if(e.code==='feedback_binding'||e.code==='feedback_recipient'){s.targets=null;s.selected='';}
    s.notice=s.pending?'请求结果未知，可沿用原请求编号重试，不会重复入队。':e.message;
   }finally{s.busy=false;paint();}
@@ -194,7 +203,7 @@ function threadFeedback(projectId,threadId){
   h('div',{class:'thread-feedback-compose'},box,submit),
   list,
   !authReady&&authError?h('form',{class:'thread-feedback-auth',onsubmit:e=>{e.preventDefault();void connect(authDraft.trim(),ctx.route());}},
-   h('input',{type:'password',autocomplete:'off','aria-label':'本地访问令牌',placeholder:'本地访问令牌',value:authDraft,oninput:e=>authDraft=e.target.value}),
+   h('input',{type:'password',autocomplete:'off','aria-label':'本地访问令牌',placeholder:'本地访问令牌（免令牌模式可留空）',value:authDraft,oninput:e=>authDraft=e.target.value}),
    h('button',{type:'submit',class:'auto-btn',disabled:connecting},'连接'),h('small',{role:'status'},authError)):null,
   authReady&&s.loadError?h('div',{},h('small',{role:'status'},s.loadError),button('重新读取协作者',loadTargets,s.loading)):null,
   h('small',{class:'auto-help'},authReady&&s.targets?.length===0?'本线程暂无可收件的协作者。':'Enter 发送 · Shift+Enter 换行'),

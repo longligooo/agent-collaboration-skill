@@ -1649,8 +1649,6 @@ def build_parser() -> argparse.ArgumentParser:
     ui_parser.add_argument("--no-token", action="store_true", help="disable token authentication for trusted loopback-only use")
     ui_parser.add_argument("--read-only", action="store_true", help="disable automatic collaboration service")
     ui_parser.set_defaults(handler=cmd_ui)
-    if __name__ == "__main__":
-        sys.modules.setdefault("collab", sys.modules[__name__])
     import task_model
     task_model.add_parsers(subparsers)
     import task_discovery
@@ -1676,4 +1674,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    # Parser extensions import collab and must share this entry point's types.
+    sys.modules["collab"] = sys.modules[__name__]
     raise SystemExit(main())
