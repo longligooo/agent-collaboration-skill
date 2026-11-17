@@ -425,8 +425,7 @@ The separate automatic backend provides coordinator-first planning, editable dra
 teams, exact revisioned human approval, durable per-recipient next-turn messages,
 and safe-boundary provider changes. Existing manual/watch workflows are unchanged.
 Start it explicitly with `python scripts/auto_service.py serve`, then use the local
-access token and project-level automatic-task entry. Version 1 targets capability-confirmed Codex CLI and Claude Code; agy execution is
-explicitly deferred. Workers use isolated snapshots of current Git-project contents, including uncommitted
+access token and project-level automatic-task entry. Version 1 targets capability-confirmed Codex CLI and Claude Code. agy is neither probed nor shown while deferred; the page reads the last discovery and updates only on an explicit refresh. Workers use isolated snapshots of current Git-project contents, including uncommitted
 work. Sensitive/ignored exclusions are disclosed, originals stay untouched, and results
 remain pending explicit application against the captured baseline. Tests use fake providers, not real models.
 See [setup, safety and current limitations](references/automatic-collaboration.md).

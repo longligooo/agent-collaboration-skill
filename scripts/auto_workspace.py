@@ -150,12 +150,15 @@ def _fingerprint(st):
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, stat.S_IMODE(st.st_mode))
 
 
+def _opened_identity(st):
+    # Windows updates ctime when a file is opened. That is not a content change.
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, stat.S_IMODE(st.st_mode))
+
+
 def _regular(path):
     st = path.lstat()
     if not stat.S_ISREG(st.st_mode):
         _error('unsupported_file_type', 'only regular files can enter a snapshot')
-    if st.st_size > MAX_FILE_BYTES:
-        _error('snapshot_limit', 'snapshot file exceeds size limit')
     return st
 
 
@@ -168,11 +171,11 @@ def _read(root, name, expected=None, *, private=False):
     fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
     with os.fdopen(fd, 'rb') as stream:
         opened = os.fstat(stream.fileno())
-        if not stat.S_ISREG(opened.st_mode) or (private and opened.st_nlink != 1) or _fingerprint(opened) != _fingerprint(before):
+        if not stat.S_ISREG(opened.st_mode) or (private and opened.st_nlink != 1) or _opened_identity(opened) != _opened_identity(before):
             _error('project_changed', 'file identity changed during capture')
-        data = stream.read(MAX_FILE_BYTES + 1)
+        data = stream.read()
         after = os.fstat(stream.fileno())
-    if len(data) > MAX_FILE_BYTES or _fingerprint(after) != _fingerprint(before) or _fingerprint(path.lstat()) != _fingerprint(before):
+    if _opened_identity(after) != _opened_identity(before) or _opened_identity(path.lstat()) != _opened_identity(before):
         _error('project_changed', 'file changed during capture')
     return data, bool(before.st_mode & 0o111)
 
@@ -234,8 +237,6 @@ def _directory_inventory(root, metadata=()):
                         _error('plain_ignore_rules_unsupported', 'plain folders with ignore rules require explicit review; files are not silently included')
                     st = _regular(path)
                     names.append(name); entries[name] = _fingerprint(st); total += st.st_size
-                    if len(entries) > MAX_FILES or total > MAX_TOTAL_BYTES:
-                        _error('snapshot_limit', 'snapshot file count or total bytes exceeds limit')
         except OSError:
             _error('snapshot_unreadable', 'project directory could not be completely enumerated')
     return {'source_kind': 'directory', 'head': None, 'index': None,
@@ -272,8 +273,6 @@ def _git_inventory(root, metadata=()):
         try: st = _regular(path)
         except FileNotFoundError: continue  # tracked deletion is current content
         entries[name] = _fingerprint(st); total += st.st_size
-        if len(entries) > MAX_FILES or total > MAX_TOTAL_BYTES:
-            _error('snapshot_limit', 'snapshot file count or total bytes exceeds limit')
     return {'source_kind': 'git', 'head': head, 'index': _index_identity(root), 'names': names,
             'entries': entries, 'omitted': omitted, 'bytes': total}
 
@@ -291,7 +290,7 @@ def capabilities(root, *, metadata_paths=()):
     result = {'kind': 'managed_snapshot', 'supported': False, 'requires_clean': False,
               'reason': None, 'capture_status': 'not_captured', 'capture_timing': 'first_worker_after_approval',
               'exclusion_policy': EXCLUSION_POLICY,
-              'limits': {'files': MAX_FILES, 'file_bytes': MAX_FILE_BYTES, 'total_bytes': MAX_TOTAL_BYTES}}
+              'limits': {'files': None, 'file_bytes': None, 'total_bytes': None}}
     try:
         inv = _inventory(root, metadata_paths)
     except AutoError as exc:
@@ -335,9 +334,6 @@ def _scan(root):
             relative = (Path(directory) / name).relative_to(root).as_posix()
             relative = _name(relative)
             path = _safe(root, relative); st = _regular(path)
-            total += st.st_size
-            if len(entries) >= MAX_FILES or total > MAX_TOTAL_BYTES:
-                _error('snapshot_limit', 'snapshot output exceeds limits')
             data, executable = _read(root, relative, _fingerprint(st), private=True)
             entries[relative] = {'sha256': _hash(data), 'size': len(data), 'executable': executable}
     return dict(sorted(entries.items()))
@@ -376,21 +372,17 @@ class WorkspaceManager:
             value.get('project_id') != project_id or value.get('task_id') != task_id):
             _error('workspace_conflict', 'snapshot binding differs; old workspaces are not adopted')
         entries, raw = _load_json(directory / 'baseline.json')
-        if not isinstance(entries, dict) or len(entries) > MAX_FILES or _hash(raw) != value.get('snapshot_id'):
+        if not isinstance(entries, dict) or _hash(raw) != value.get('snapshot_id'):
             _error('workspace_conflict', 'snapshot baseline manifest differs')
-        total = 0
         if value['file_count'] != len(entries):
             _error('workspace_conflict', 'snapshot file count differs')
         for name, entry in entries.items():
             _name(name)
             if (not isinstance(entry, dict) or set(entry) != {'sha256', 'size', 'executable'} or
                 not isinstance(entry.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256']) or
-                type(entry.get('size')) is not int or not 0 <= entry['size'] <= MAX_FILE_BYTES or
+                type(entry.get('size')) is not int or entry['size'] < 0 or
                 type(entry.get('executable')) is not bool):
                 _error('workspace_conflict', 'invalid baseline entry')
-            total += entry['size']
-        if total > MAX_TOTAL_BYTES:
-            _error('workspace_conflict', 'baseline exceeds total size limit')
         for child in ('baseline', 'checkout'):
             path = directory / child
             if auto_process.is_unsafe_link(path) or not path.is_dir():

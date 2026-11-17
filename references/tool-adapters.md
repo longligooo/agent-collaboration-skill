@@ -209,4 +209,4 @@ The protocol does not create background execution by itself. Configure wake-up s
 - scheduled `collab.py watch --once` for tools without a long-running watcher;
 - CI job for repository-hosted verification.
 
-Every wake-up must run one bounded scan cycle. Stop or remove temporary polling, hooks, and watchers when the thread is terminal or a human requests a stop.
+Every wake-up must run one bounded scan cycle. Stop or remove temporary polling, hooks, and watchers when the thread is terminal or a human requests a stop. For already-open collaborator sessions, follow the default [scoped listener rules](scoped-listeners.md); the wake commands above are separate explicit opt-ins.

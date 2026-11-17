@@ -26,15 +26,30 @@ Register projects through the existing authorized local CLI workflow first.
 
 ## Current provider support
 
-Discovery runs only when the local owner requests it. GET requests and importing
-modules do not run provider processes or models. Discovery uses the server user's
+Discovery runs only when the local owner clicks refresh. Opening the page and
+GET requests read the last successful discovery from the local UI home; importing
+modules does not run provider processes or models. Discovery uses the server user's
 PATH and configured local CLI authentication, never a browser-supplied executable.
 
 | Provider | Discovery | Automatic execution in this MVP |
 | --- | --- | --- |
 | Claude Code | Installed/auth/help/version; SDK model catalogue remains unknown when no supported SDK integration exists | Known, capability-confirmed CLI versions only: tool-free coordinator; restricted file tools and, where supported, sandboxed Bash/tests. No delegated agents, MCP, unrestricted fallback or permission bypass. |
 | Codex CLI | App-server account/read, paginated model/list, effective feature/profile verification | Experimental permission-profile protocol: read-only coordinator without shell; worker shell/tests only inside verified minimal-read, managed-workspace-write, network-disabled profile. Unknown schemas/policies fail closed. |
-| agy CLI | Separate adapter; help and `agy models`; unstructured catalogue stays unknown | Deferred by explicit user choice for v1. No SDK installation or API-key billing substitution. |
+| agy CLI | Not probed or shown while deferred | Deferred by explicit user choice for v1. No SDK installation, model-catalogue query, or API-key billing substitution. |
+
+Claude local model choices follow the service user's `modelPicker.options` in
+`settings.json`, including order, labels, and `replaceBuiltInOptions`; otherwise
+configured default-model environment values remain available. These are local
+configuration hints, not an account-verified SDK catalogue. Settings/credential
+values are never returned with the catalogue.
+
+An explicitly queued job revalidates an expired previous capability discovery
+before constructing its launch. GET remains cache-only; discovery does not send a
+model prompt. Changed credentials/executables still need successful verification.
+Planning accepts a complete JSON object or one whole JSON Markdown fence and
+continues through the existing plan validator and human approval gate. Invalid
+planning JSON is reported as `invalid_plan_json`, with its response retained only
+in the local task attempt evidence; arbitrary surrounding prose is rejected.
 
 Exact version and flag checks, limits, source links, and trust assumptions are in
 [`scripts/auto_providers/SECURITY.md`](../scripts/auto_providers/SECURITY.md).

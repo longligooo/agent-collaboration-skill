@@ -11,7 +11,7 @@ Coordinate agents through immutable Markdown turns and small JSON signals stored
 
 Read [references/protocol.md](references/protocol.md) before creating or processing a collaboration thread. Read [references/tickets.md](references/tickets.md) before writing a spec, writing a ticket, dispatching work, or opening a thread. Read [references/artifact-format.md](references/artifact-format.md) when writing a turn. Read [references/tool-adapters.md](references/tool-adapters.md) only when configuring a coding tool to discover this skill or monitor signals.
 
-When a turn's task comes from a ticket, read that ticket and the `spec.md` it cites before processing the turn. `scripts/collab.py` does not parse tickets.
+When a turn's task comes from a ticket, read that ticket and the `spec.md` it cites before processing the turn. Apply [the role workflow](references/tickets.md#按角色执行任务): the coordinator clarifies human intent before dispatch and escalates material problems promptly; assignees ask the coordinator when requirements are unclear. Review implementation plans before edits and test cases before acceptance runs. These are collaboration rules; `scripts/collab.py` does not parse tickets or enforce these gates.
 
 Use `python scripts/collab.py --help` for deterministic workspace operations. The script uses only the Python standard library.
 
@@ -37,6 +37,14 @@ Use `python scripts/collab.py --help` for deterministic workspace operations. Th
 - A ticket stays blocked until every ticket named in `Blocked by` is `resolved`. `wontfix` does not lift that block.
 - `--topic` is the readable thread title. Summarize it in the primary language of the human's conversation. A Chinese conversation gets a Chinese title. Keep `thread_id` as a stable ASCII slug.
 - A new collaborator gets one opening prompt that tells them to use this skill on the new thread. A known collaborator gets no opening prompt.
+
+## Receive WebUI Feedback While Polling
+
+If the current session already polls `inbox --format json` or `text` as its participant, it can also receive `FEEDBACK` from WebUI. Read it as a human note, separate from a formal `NEW` signal; its arrival alone does not grant approval or authorize work. After handling it in the current conversation, run `feedback-ack --root <root> --agent <participant> --thread-id <thread> --message-id <id>`. Do not publish an agent turn merely to acknowledge it. Feedback alone does not trigger `watch`, the CLI wake adapters, or `inbox --format prompt`.
+
+For an already running listener, add `--client <client-id>` to its JSON/text poll or set `COLLAB_CLIENT` in that listener's session. Use the actual client (for example `codex`, `cursor`, or `claude-code`), never the participant name. WebUI shows the latest reported client for that participant in the project, expiring after 15 minutes. When switching, stop polling in the old client; if both report, the latest report wins. This does not establish online status, change a direct session binding, or grant permissions.
+
+If a formal publish returns `codex_notice: queued`, the existing bound Codex conversation has already been notified; do not send a second reminder. The formal signal remains authoritative, and a reminder is not an approval.
 
 ## Choose The Collaboration Action
 
@@ -259,7 +267,8 @@ Keep the protocol identical across tools. Change only discovery and wake-up beha
 - Use native skills when the tool supports `SKILL.md`.
 - Use project rules or `AGENTS.md` to point other tools to this file.
 - Prefer `collab.py watch` for unattended multi-round work; use hooks, scheduled jobs, or manual prompts only when a tool has no non-interactive CLI.
-- Keep polling configuration outside this skill and disable it when the thread becomes terminal.
+- For existing collaborator sessions, follow [Scoped Listener Policy](references/scoped-listeners.md) by default: decide from the actual peers, use direct messages for Codex-to-Codex, and use one shared Luna relay per Codex instance for peers without direct delivery. A Codex collaborator must not schedule its own collaboration polls.
+- Start scoped listening only in a client that can actually schedule it. Stop it when the collaboration is confirmed complete or its idle limit is reached. Never substitute the unattended task runner for a missing session listener.
 
 Do not claim continuous monitoring unless a tool-specific watcher or scheduler is actually active.
 

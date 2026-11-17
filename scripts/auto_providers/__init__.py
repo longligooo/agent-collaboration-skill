@@ -25,7 +25,9 @@ from pathlib import Path
 
 import auto_process
 
-PROVIDERS = ("codex", "claude", "agy")
+PROVIDERS = ("codex", "claude")
+ACTIVE_PROVIDERS = PROVIDERS
+DEFERRED_PROVIDERS = ("agy",)
 from auto_model_id import MODEL_ID
 
 
@@ -170,7 +172,7 @@ def _models(items, *, key="id", label="displayName"):
 
 def parse_result(provider_id: str, stdout: bytes | str) -> str:
     """Extract plain result, not arbitrary events; the runtime validates plan JSON."""
-    if provider_id not in PROVIDERS:
+    if provider_id not in ACTIVE_PROVIDERS:
         raise ProviderError("unknown_provider")
     if not isinstance(stdout, (bytes, str)) or len(stdout) > 1024 * 1024:
         raise ProviderError("invalid_result")
@@ -184,6 +186,14 @@ def parse_result(provider_id: str, stdout: bytes | str) -> str:
     # supervised app-server execution adapter establishes terminal event evidence.
     if provider_id == "agy" and value.get("status") != "SUCCESS":
         raise ProviderError("provider_failed")
+    if provider_id == "claude" and value.get("structured_output") is not None:
+        structured = value["structured_output"]
+        if not isinstance(structured, dict):
+            raise ProviderError("invalid_result")
+        try:
+            return json.dumps(structured, ensure_ascii=False, allow_nan=False)
+        except (ValueError, TypeError):
+            raise ProviderError("invalid_result") from None
     key = {"claude": "result", "agy": "response"}.get(provider_id)
     if key is None:
         raise ProviderError("unsupported_result_format")
@@ -326,9 +336,8 @@ class ProviderRegistry:
                 record["sandbox_startup_tested"] = False
                 record["managed_policy_trusted"] = True
                 record["unavailable_reason"] = None if record["auth_status"] == "authenticated" else "auth_unconfirmed"
-        from .claude import configured_models
-        record["models"] = configured_models(self._env("claude"))
-        record["catalog_source"] = "claude.local_config" if record["models"] else "claude.agent-sdk.supportedModels"
+        from .claude import configured_model_catalog
+        record["models"], record["catalog_source"] = configured_model_catalog(self._env("claude"))
         record["catalog_reason"] = "local_config_not_provider_verified" if record["models"] else "sdk_discovery_not_available"
 
     def _agy(self, executable, cwd, record):
@@ -342,13 +351,56 @@ class ProviderRegistry:
         record["catalog_reason"] = "unstructured_catalog" if code == 0 else "catalog_command_failed"
         # JSON is not documented; even JSON-looking output is not an agreed schema.
 
+    def _cache_path(self):
+        override = os.environ.get("COLLAB_UI_HOME")
+        home = Path(override).expanduser() if override else Path.home() / ".agent-collaboration"
+        identity = hashlib.sha256(self.path.encode("utf-8", "replace")).hexdigest()[:16]
+        return home / ("provider-discovery-" + identity + ".json")
+
+    def _load_cache(self):
+        """Read the last explicit discovery. Missing or unusable cache stays undiscovered."""
+        try:
+            path = self._cache_path()
+            raw = path.read_bytes()
+            if len(raw) > 1024 * 1024:
+                return
+            value = json.loads(raw)
+            if not isinstance(value, dict) or value.get("schema_version") != 1:
+                return
+            checked = value.get("checked_at")
+            records = value.get("providers")
+            if not isinstance(checked, (int, float)) or not isinstance(records, list):
+                return
+            if checked > time.time() + 300 or time.time() - checked > 30 * 24 * 3600:
+                return
+            by_id = {}
+            for record in records:
+                if isinstance(record, dict) and record.get("id") in ACTIVE_PROVIDERS:
+                    by_id[record["id"]] = record
+            if set(by_id) != set(ACTIVE_PROVIDERS):
+                return
+            self._cache = [by_id[provider] for provider in ACTIVE_PROVIDERS]
+            self._checked = time.monotonic() - max(0.0, time.time() - checked)
+        except (OSError, ValueError, TypeError, RecursionError):
+            return
+
+    def _save_cache(self):
+        path = self._cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        payload = {"schema_version": 1, "checked_at": time.time(), "providers": self._cache}
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+
     def discover(self, refresh=False):
-        """Cache-only unless refresh=True. No implicit process launch on GET."""
+        """Use the last explicit discovery unless refresh=True. GET never probes."""
         with self._lock:
+            if self._cache is None and not refresh:
+                self._load_cache()
             if refresh:
                 records = []
                 with tempfile.TemporaryDirectory(prefix="collab-provider-probe-") as cwd:
-                    for provider in PROVIDERS:
+                    for provider in ACTIVE_PROVIDERS:
                         executable = shutil.which(provider, path=self.path)
                         record = {"id": provider, "installed": executable is not None,
                             "auth_status": "unknown", "headless_status": "unknown",
@@ -379,13 +431,22 @@ class ProviderRegistry:
                                     record["catalog_status"] = "stale"
                         records.append(record)
                 self._cache, self._checked = records, time.monotonic()
+                self._save_cache()
             if self._cache is None:
-                return [{"id": p, "installed": shutil.which(p, path=self.path) is not None,
+                undiscovered = [{"id": p, "installed": shutil.which(p, path=self.path) is not None,
                     "auth_status": "unknown", "headless_status": "unknown", "planning_isolation": "unverified",
                     "execution_status": "blocked", "models": [], "catalog_source": None,
                     "catalog_checked_at": None, "catalog_status": "unknown",
-                    "unavailable_reason": "discovery_required"} for p in PROVIDERS]
-            result = copy.deepcopy(self._cache)
+                    "unavailable_reason": "discovery_required"} for p in ACTIVE_PROVIDERS]
+            else:
+                undiscovered = []
+            deferred = [{"id": p, "installed": False, "auth_status": "unknown", "headless_status": "unavailable",
+                "planning_isolation": "unverified", "execution_status": "blocked", "models": [],
+                "catalog_source": None, "catalog_checked_at": None, "catalog_status": "unknown",
+                "unavailable_reason": "deferred"} for p in DEFERRED_PROVIDERS]
+            if self._cache is None:
+                return undiscovered + deferred
+            result = copy.deepcopy(self._cache) + deferred
             if time.monotonic()-self._checked > self.ttl:
                 for record in result:
                     record["capabilities_status"] = "stale"

@@ -266,3 +266,9 @@ select { background: var(--raised); border: 1px solid #485d41; border-radius: 5p
 .auto-export{margin:12px 0;min-width:0;overflow-wrap:anywhere}.auto-export summary{cursor:pointer;padding:6px 0}.auto-export pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;background:#171e19;padding:10px;border-radius:5px}.auto-export details{margin:8px 0}.auto-export summary:focus-visible{outline:2px solid #c8ef9b;outline-offset:2px}
 
 .pagination { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 20px 0; flex-wrap: wrap; }
+
+.thread-feedback { flex: 1 1 100%; min-width: 0; }
+.thread-feedback { display: grid; gap: 8px; }
+.thread-feedback-compose, .thread-feedback-auth { display: flex; gap: 8px; align-items: flex-start; }
+.thread-feedback-compose textarea { min-width: 0; flex: 1; resize: vertical; }
+.thread-feedback-suggestions:not([hidden]) { display: flex; gap: 6px; flex-wrap: wrap; }

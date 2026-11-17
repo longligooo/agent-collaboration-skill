@@ -74,10 +74,9 @@ Models shown by discovery are not guaranteed account execution entitlements.
 
 ### agy
 
-This is a separate adapter, not a Gemini executable alias. `agy models` has no
-stable documented machine-readable format, so text output is not guessed into a
-model list. Auth remains unknown; no onboarding or import is attempted. Headless
-support is help-observed. Execution is deferred from v1 by the user; only Codex CLI and Claude Code are in v1.
+agy remains deferred and is not probed or offered. Discovery only checks Codex
+and Claude. Its previous help and `agy models` probe is intentionally not run,
+because its catalogue format is not stable and the network query blocked refresh.
 
 ## Sources checked 2026-11-02
 

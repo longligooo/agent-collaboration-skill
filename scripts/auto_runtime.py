@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import stat
 import subprocess
 import threading
@@ -236,6 +237,18 @@ def _compact_result(result, retained):
 def plan_paths(task_id):
     base = f".scratch/automatic-{task_id}"
     return base + "/spec.md", base + "/issues/01-approved-plan.md"
+
+
+def _planning_json(text):
+    """Accept one complete JSON payload, optionally in one whole Markdown fence."""
+    body = text.strip().lstrip("\ufeff")
+    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", body, re.I | re.S)
+    if fence:
+        body = fence.group(1)
+    try:
+        return json.loads(body)
+    except (ValueError, TypeError, RecursionError):
+        fail("invalid_plan_json", "coordinator planning response must contain one JSON object")
 
 
 def _validated_plan(task, value):
@@ -607,6 +620,7 @@ class Supervisor:
     def _cycle(self, store, job):
         root = str(store.root)
         workspace = None
+        result = {"output": ""}
         try:
             task = store.get_task(job["task_id"])
             messages = store.job_messages(job["id"], job["token"])
@@ -630,6 +644,12 @@ class Supervisor:
                 if existing is not None:
                     workspace = self.workspace_manager.ensure(store.root, store.project_id, task["id"])
             launch_options = {"protected_roots": (store.root, self.workspace_manager.home)} if workspace and isinstance(self.providers, ProviderRegistry) else {}
+            # Explicit task execution may revalidate an expired prior discovery.
+            # Cache-only GET remains side-effect free; no model prompt is probed.
+            capability = next((p for p in self.providers.discover()
+                               if p.get("id") == job["binding"]["provider_id"]), {})
+            if capability.get("unavailable_reason") == "discovery_stale":
+                self.providers.discover(refresh=True)
             spec = self.providers.build_launch(job["binding"]["provider_id"], job["binding"].get("model_id"),
                         phase=phase, prompt=self._prompt(store, task, job, messages, workspace),
                         cwd=Path(workspace["path"]) if workspace else store.root, **launch_options)
@@ -639,7 +659,7 @@ class Supervisor:
                 decoder = getattr(self.providers, "parse_result", parse_result)
                 result["output"] = output.decode("utf-8") if spec.output_format == "codex-app-server" else decoder(job["binding"]["provider_id"], output)
                 if job["kind"] == "planning":
-                    plan = _validated_plan(task, json.loads(result["output"]))
+                    plan = _validated_plan(task, _planning_json(result["output"]))
                     current = store.get_task(task["id"])
                     if current["state"] == "planning":
                         store.submit_plan(task["id"], plan, expected_revision=current["revision"])
@@ -667,10 +687,12 @@ class Supervisor:
             current = store.get_job(job["id"])
             if current["state"] == "claimed":
                 try:
-                    result = {"error_code": reason}
+                    failure = {"error_code": reason}
+                    if reason in {"invalid_plan_json", "invalid_plan"}:
+                        failure["output"] = result.get("output", "")
                     state = "unknown" if reason == "process_unknown" else "failed"
-                    self._attempt(store, job, state, result)
-                    store.finish(job["id"], job["token"], state, result)
+                    retained = self._attempt(store, job, state, failure)
+                    store.finish(job["id"], job["token"], state, _compact_result(failure, retained))
                 except AutoError:
                     store.expire_claims()
         finally:

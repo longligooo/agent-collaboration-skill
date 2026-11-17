@@ -22,7 +22,7 @@ function href(project,id=''){return '#/auto/'+encodeURIComponent(project)+(id?'/
 function input(id,label,value,oninput,options={}){const {h}=ctx;return h('label',{class:'auto-field',for:id},h('span',{},label),h(options.multiline?'textarea':'input',{id,'aria-label':label,disabled:busy||!!pendingMutation,value:options.multiline?null:value,type:options.multiline?null:options.type||'text',rows:options.multiline?3:null,maxlength:options.max||60000,autocomplete:'off',oninput:e=>oninput(e.target.value)},options.multiline?value:null));}
 function select(id,label,value,values,onchange,disabled=false){const {h}=ctx;return h('label',{class:'auto-field',for:id},h('span',{},label),h('select',{id,'aria-label':label,disabled:disabled||busy||!!pendingMutation,onchange:e=>onchange(e.target.value)},values.map(o=>h('option',{value:o.value,selected:o.value===value,disabled:o.disabled},o.label))));}
 function provider(id){return providerData.find(p=>p.id===id);}
-function providerFields(prefix,binding,onchange,locked=false){const {h}=ctx,p=provider(binding.provider_id),models=arr(p?.models),modelInput=prefix+'-model',suggestions=modelInput+'-suggestions';return h('div',{class:'auto-fields'},select(prefix+'-provider','Provider',binding.provider_id||'', [{value:'',label:'请选择可用 provider',disabled:true},...providerData.map(p=>({value:p.id,label:({codex:'Codex CLI',claude:'Claude Code',agy:'agy CLI'})[p.id]||p.id,disabled:!available(p)}))],v=>{onchange({provider_id:v,model_id:null});paint()},locked),h('label',{class:'auto-field',for:modelInput},h('span',{},'模型'),h('input',{id:modelInput,'aria-label':'模型',type:'text',list:suggestions,value:binding.model_id||'',placeholder:'留空使用工具默认模型',autocomplete:'off',disabled:locked||!available(p)||busy||!!pendingMutation,oninput:e=>onchange({model_id:e.target.value||null})}),h('datalist',{id:suggestions},models.map(m=>h('option',{value:m.id},m.label||m.id)))),h('small',{class:'auto-help'},'可选择建议型号，也可直接输入第三方模型名称；按原样发送，不要求在目录中。名称或目录不代表服务端已验证可用。支持 Codex CLI / Claude Code；agy 暂不支持。'));}
+function providerFields(prefix,binding,onchange,locked=false){const {h}=ctx,p=provider(binding.provider_id),models=arr(p?.models),modelInput=prefix+'-model',suggestions=modelInput+'-suggestions';return h('div',{class:'auto-fields'},select(prefix+'-provider','Provider',binding.provider_id||'', [{value:'',label:'请选择可用 provider',disabled:true},...providerData.filter(p=>p.unavailable_reason!=='deferred').map(p=>({value:p.id,label:({codex:'Codex CLI',claude:'Claude Code'})[p.id]||p.id,disabled:!available(p)}))],v=>{onchange({provider_id:v,model_id:null});paint()},locked),h('label',{class:'auto-field',for:modelInput},h('span',{},'模型'),h('input',{id:modelInput,'aria-label':'模型',type:'text',list:suggestions,value:binding.model_id||'',placeholder:'留空使用工具默认模型',autocomplete:'off',disabled:locked||!available(p)||busy||!!pendingMutation,oninput:e=>onchange({model_id:e.target.value||null})}),h('datalist',{id:suggestions},models.map(m=>h('option',{value:m.id},m.label||m.id)))),h('small',{class:'auto-help'},'可选择建议型号，也可直接输入第三方模型名称；按原样发送，不要求在目录中。名称或目录不代表服务端已验证可用。支持 Codex CLI / Claude Code。'));}
 async function request(path,options={}){const {method='GET',body,signal,idempotency}=options;const headers={'X-Collab-Local':'1',...(token?{Authorization:'Bearer '+token}:{})};if(method==='POST'){headers['Content-Type']='application/json';headers['X-Collab-CSRF']=csrf;headers['Idempotency-Key']=idempotency;}const response=await fetch(path,{method,headers,body:method==='POST'?JSON.stringify(body):undefined,signal,cache:'no-store',credentials:'same-origin',redirect:'error'});let value;try{value=await response.json()}catch(_){throw new Error('服务返回格式无效。')};if(!response.ok){const error=new Error(response.status===404?'自动协作服务未开启或资源不存在。原有只读功能不受影响。':response.status===401||response.status===403?'本地授权失效或请求被拒绝，请重新连接。':`${value.error?.message||'请求失败'}（${value.error?.code||response.status}）`);error.status=response.status;error.code=value.error?.code;throw error}return value;}
 async function discoverAuth(r){
  if(discoveryChecked||discoveryPending||authReady||connecting)return;
@@ -37,7 +37,7 @@ async function discoverAuth(r){
 }
 async function connect(value,r){
  if(connecting)return;const connection=++connectionRevision;connecting=true;token=value;authDraft='';authError='';paint();
- const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),60000);
+ const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15000);
  try{const result=await request('/api/auto/v1/session',{signal:abort.signal});if(connection!==connectionRevision)return;
   if(result.enabled!==true||!result.csrf_token)throw new Error('自动协作会话不可用。');csrf=result.csrf_token;authReady=true;
  }catch(e){if(connection!==connectionRevision)return;authError=e.name==='AbortError'?'连接超时，请重试。':e.message;token='';csrf='';authReady=false;
@@ -45,7 +45,7 @@ async function connect(value,r){
  const current=ctx.route();if(authReady&&connection===connectionRevision&&current.name==='auto')await refresh(current);
 }
 function disconnect(){discoveryChecked=true;connectionRevision++;seq++;controller?.abort();token='';authDraft='';csrf='';authReady=false;authError='';pendingMutation=null;data.clear();drafts.clear();composers.clear();planDrafts.clear();changes.clear();providerData=[];providerError='';paint();}
-async function refresh(r,{providers=false}={}){if(!authReady||!r?.projectId)return;lastRoute=r;const k=key(r),s=state(r),n=++seq;controller?.abort();controller=new AbortController();const requestController=controller,signal=requestController.signal;s.loading=true;s.error='';s.capabilities=null;paint();const timer=setTimeout(()=>requestController.abort(),60000);try{if(providers||!providerData.length){const p=await request('/api/auto/v1/providers',{signal});if(n!==seq)return;providerData=arr(p.providers);providerError='';}const capability=await request(`/api/auto/v1/projects/${encodeURIComponent(r.projectId)}/capabilities`,{signal});if(n!==seq)return;s.capabilities=capability;if(r.taskId&&r.taskId!=='new'){const result=await request(endpoint(r),{signal});if(n!==seq)return;if(result.task?.id!==r.taskId||result.task?.project_id!==r.projectId)throw new Error('任务响应与当前项目不匹配。');s.task=result.task;s.loaded=true;const values=await Promise.all([request(endpoint(r)+'/messages',{signal}),request(endpoint(r)+'/events',{signal})]);if(n!==seq)return;s.messages=arr(values[0].events);s.events=arr(values[1].events);s.messageCursor=values[0].next_cursor;s.eventCursor=values[1].next_cursor;if(s.task.thread_id){try{const detail=await request(`/api/thread?${new URLSearchParams({project_id:r.projectId,thread_id:s.task.thread_id})}`,{signal});if(n!==seq)return;const thread=detail.thread;if(!thread||thread.thread_id!==s.task.thread_id||thread.project_id!==r.projectId)throw new Error('线程响应与当前任务不匹配。');s.thread=thread;s.threadError='';}catch(e){if(n===seq)s.threadError=e.message;}}}else if(r.taskId!=='new'){const result=await request(endpoint(r),{signal});if(n!==seq)return;s.tasks=arr(result.tasks);s.nextCursor=result.next_cursor;s.loaded=true;}else s.loaded=true;}catch(e){if(n===seq)s.error=e.name==='AbortError'?'读取超时或已取消，请手动刷新；保留已有记录。':e.message;}finally{clearTimeout(timer);if(n===seq){s.loading=false;paint();}}}
+async function refresh(r,{providers=false}={}){if(!authReady||!r?.projectId)return;lastRoute=r;const k=key(r),s=state(r),n=++seq;controller?.abort();controller=new AbortController();const requestController=controller,signal=requestController.signal;s.loading=true;s.error='';s.capabilities=null;paint();const timer=setTimeout(()=>requestController.abort(),120000);try{if(providers||!providerData.length){const p=await request('/api/auto/v1/providers',{signal});if(n!==seq)return;providerData=arr(p.providers);providerError='';}const capability=await request(`/api/auto/v1/projects/${encodeURIComponent(r.projectId)}/capabilities`,{signal});if(n!==seq)return;s.capabilities=capability;if(r.taskId&&r.taskId!=='new'){const result=await request(endpoint(r),{signal});if(n!==seq)return;if(result.task?.id!==r.taskId||result.task?.project_id!==r.projectId)throw new Error('任务响应与当前项目不匹配。');s.task=result.task;s.loaded=true;const values=await Promise.all([request(endpoint(r)+'/messages',{signal}),request(endpoint(r)+'/events',{signal})]);if(n!==seq)return;s.messages=arr(values[0].events);s.events=arr(values[1].events);s.messageCursor=values[0].next_cursor;s.eventCursor=values[1].next_cursor;if(s.task.thread_id){try{const detail=await request(`/api/thread?${new URLSearchParams({project_id:r.projectId,thread_id:s.task.thread_id})}`,{signal});if(n!==seq)return;const thread=detail.thread;if(!thread||thread.thread_id!==s.task.thread_id||thread.project_id!==r.projectId)throw new Error('线程响应与当前任务不匹配。');s.thread=thread;s.threadError='';}catch(e){if(n===seq)s.threadError=e.message;}}}else if(r.taskId!=='new'){const result=await request(endpoint(r),{signal});if(n!==seq)return;s.tasks=arr(result.tasks);s.nextCursor=result.next_cursor;s.loaded=true;}else s.loaded=true;}catch(e){if(n===seq)s.error=e.name==='AbortError'?'读取超时或已取消，请手动刷新；保留已有记录。':e.message;}finally{clearTimeout(timer);if(n===seq){s.loading=false;paint();}}}
 function navigate(r){activeKey=key(r);lastRoute=r;seq++;controller?.abort();for(const s of data.values())s.loading=false;if(authReady&&r.name==='auto')refresh(r);else if(r.name==='auto')discoverAuth(r);}
 async function mutate(r,path,body,{onSuccess}={}){if(busy||!authReady)return;const signature=JSON.stringify([path,body]);if(pendingMutation&&pendingMutation.signature!==signature){state(r).error='上一次提交结果不确定，表单已锁定以保护未提交草稿。请先重试原提交，不要提交不同操作。';paint();return}pendingMutation=pendingMutation||{signature,path,body:clone(body),key:'ui-'+crypto.randomUUID(),onSuccess,route:{...r}};r=pendingMutation.route;const savedSuccess=pendingMutation.onSuccess;const connection=connectionRevision;busy=true;state(r).error='';paint();const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),60000);try{const result=await request(path,{method:'POST',body,idempotency:pendingMutation.key,signal:abort.signal});if(connection!==connectionRevision)return;if(result.task){if(result.task.project_id!==r.projectId||(r.taskId&&r.taskId!=='new'&&result.task.id!==r.taskId))throw new Error('任务响应身份不匹配，请刷新核实提交结果。');state(r).task=result.task;planDrafts.delete(key(r));}pendingMutation=null;if(savedSuccess)savedSuccess(result);if(key(ctx.route())===key(r))await refresh(ctx.route(),{providers:path.endsWith('/providers/refresh')});}catch(e){if(connection!==connectionRevision)return;state(r).error=e.name==='AbortError'?'提交超时，结果未知。重试使用同一幂等键，不会重复创建。':e.message;if(e.status){if(e.status<500&&e.status!==408)pendingMutation=null;if(e.status===409)state(r).error+=' 当前版本已变化，请刷新后重新确认。';if(e.status===401||e.status===403){authReady=false;authError=e.message;}}}finally{clearTimeout(timer);busy=false;paint();}}
 function title(r){return ['自动协作任务',ctx?.findProject(r.projectId)?.name||'项目内自动协作'];}
@@ -62,7 +62,7 @@ async function more(r,type,cursor){
  }catch(e){if(valid())s.error=e.name==='AbortError'?'分页读取超时，请重试。':e.message;}finally{clearTimeout(timer);if(valid()){s.loading=false;paint();}}
 }
 function draftFor(r){if(!drafts.has(r.projectId))drafts.set(r.projectId,{title:'',instruction:'',coordinator:{participant_id:'coordinator',provider_id:'',model_id:null}});return drafts.get(r.projectId);}
-function providersView(r){const {h}=ctx;return h('section',{},h('div',{class:'auto-toolbar'},h('h3',{},'当前可用 AI IDE'),button('↻ 重新发现',()=>mutate(r,'/api/auto/v1/providers/refresh',{}))),h('p',{class:'auto-help'},'只读取本机能力，不运行模型。未安装、认证未知、执行隔离未验证均不会假装就绪。'),providerError?h('p',{role:'alert'},providerError):null,h('div',{class:'provider-status'},providerData.map(p=>h('div',{},h('strong',{},({codex:'Codex CLI',claude:'Claude Code',agy:'agy CLI'})[p.id]||p.id),h('span',{class:available(p)?'auto-ready':'auto-help'},available(p)?(p.auth_status==='configured'?'已配置 · 远端未验证':'可用'):p.id==='agy'?'后续支持 · 当前禁用':'不可启动 / 未验证'),h('small',{},`安装：${p.installed?'已安装':'未发现'} · 认证：${p.auth_status==='configured'?'本地已配置，远端未验证':p.auth_status||'unknown'} · headless：${p.headless_status||'unknown'}`),h('small',{},`隔离：${p.planning_isolation||'unknown'} · 模型目录：${p.catalog_status||'unknown'}`),p.execution_status?h('small',{},'执行能力：'+p.execution_status+(p.execution_status==='file_tools_only'?' · 仅文件工具，不代表可自主运行测试':'')):null,p.execution_reason?h('small',{},p.execution_reason):null,p.unavailable_reason?h('small',{},p.unavailable_reason):null))));}
+function providersView(r){const {h}=ctx,shown=providerData.filter(p=>p.unavailable_reason!=='deferred');return h('section',{},h('div',{class:'auto-toolbar'},h('h3',{},'当前可用 AI IDE'),button('↻ 重新发现',()=>mutate(r,'/api/auto/v1/providers/refresh',{}))),h('p',{class:'auto-help'},'默认读取上次发现结果，不自动探测。只有点击重新发现才更新；未安装、认证未知、执行隔离未验证均不会假装就绪。'),providerError?h('p',{role:'alert'},providerError):null,h('div',{class:'provider-status'},shown.map(p=>h('div',{},h('strong',{},({codex:'Codex CLI',claude:'Claude Code'})[p.id]||p.id),h('span',{class:available(p)?'auto-ready':'auto-help'},available(p)?(p.auth_status==='configured'?'已配置 · 远端未验证':'可用'):'不可启动 / 未验证'),h('small',{},`安装：${p.installed?'已安装':'未发现'} · 认证：${p.auth_status==='configured'?'本地已配置，远端未验证':p.auth_status||'unknown'} · headless：${p.headless_status||'unknown'}`),h('small',{},`隔离：${p.planning_isolation||'unknown'} · 模型目录：${p.catalog_status||'unknown'}`),p.execution_status?h('small',{},'执行能力：'+p.execution_status+(p.execution_status==='file_tools_only'?' · 仅文件工具，不代表可自主运行测试':'')):null,p.execution_reason?h('small',{},p.execution_reason):null,p.unavailable_reason?h('small',{},p.unavailable_reason):null))));}
 function workspaceReady(r){const w=state(r).capabilities?.execution_workspace;return w?.supported===true&&['managed_snapshot','managed_worktree'].includes(w.kind);}
 function workspaceExclusions(w){if(!w)return null;const {h}=ctx;return h('details',{class:'auto-export'},h('summary',{},'快照排除 / 遗漏：'+(Number.isFinite(w.omitted_count)?w.omitted_count:'未提供')+' 项'),h('p',{},'排除策略：'+(typeof w.exclusion_policy==='string'?w.exclusion_policy:JSON.stringify(w.exclusion_policy||'未提供'))),arr(w.omitted_paths).length?h('pre',{},arr(w.omitted_paths).join('\n')):h('p',{},'没有提供遗漏路径。'),w.omitted_paths_truncated?h('p',{class:'auto-error'},'遗漏路径列表已截断，并非完整清单。'):null);}
 function applicationView(a){if(!a)return null;const {h}=ctx;const describe=f=>f?'SHA-256 '+(f.sha256||'未知')+' · '+(f.size??'未知')+' bytes · executable='+(typeof f.executable==='boolean'?f.executable:'未知'):'不存在';return h('details',{class:'auto-export'},h('summary',{},'只读差异与本地导出 · '+(a.change_count??arr(a.changes).length)+' 项变更'),h('p',{},'不会自动应用。应用前逐项比对原目录当前文件与 before SHA-256 / executable；新增文件须确认目标仍不存在。任何冲突请先人工检查与合并，不要直接覆盖。'),a.artifact_directory?h('div',{},h('strong',{},'本地不可变导出目录（在本机终端或文件管理器打开）'),h('pre',{},text(a.artifact_directory)),h('p',{},'manifest.json 记录基线与变更；after/ 保存新增或修改文件的实际字节（包括二进制）。删除仅列在清单中，需人工确认。')):h('p',{},'尚无已保留的导出目录。'),a.retained_diff?h('div',{},h('strong',{},'保留的变更清单'),h('pre',{},text(a.retained_diff))):null,a.export_format?h('small',{},'格式：'+text(a.export_format)):null,a.changes_truncated?h('p',{class:'auto-error'},'变更清单已截断；请检查本地完整 manifest.json。'):null,arr(a.changes).map(c=>h('details',{},h('summary',{},text(c.kind)+' · '+text(c.path)+(c.binary_or_large?' · 二进制或大文件':'')),h('p',{},'before：'+describe(c.before)),h('p',{},'after：'+describe(c.after)))),a.patch_truncated?h('p',{class:'auto-error'},'文本 diff 已截断，不是全部变更。'):null,a.untracked_files_truncated?h('p',{class:'auto-error'},'未跟踪文件清单已截断。'):null,typeof a.tracked_patch==='string'?h('details',{},h('summary',{},'文本 diff（只读；二进制 / 大文件请查看清单与导出）'),h('pre',{},a.tracked_patch||'没有可显示的文本差异。')):null);}
@@ -102,5 +102,103 @@ function chatView(r,s){
 }
 function runtimePerson(r,t,p,i){const {h}=ctx,k=key(r)+'/'+p.participant_id;let d=changes.get(k);if(!d){d={provider_id:p.provider_id,model_id:p.model_id};changes.set(k,d);}const queued=arr(t.queued_provider_changes).find(c=>c.participant_id===p.participant_id);return h('section',{class:'runtime-person'},h('div',{class:'participant'},ctx.avatar(p.identity||ctx.identityFor?.(t.project_id,p.participant_id)||p.participant_id,p.participant_id,'sm'),h('strong',{},p.participant_id)),h('small',{},'当前：'+p.provider_id+' / '+(p.model_id||'工具默认')),providerFields('auto-runtime-'+i,d,patch=>Object.assign(d,patch),terminal(t)||!t.thread_id),button('申请更换',()=>mutate(r,endpoint(r)+'/participants/'+encodeURIComponent(p.participant_id)+'/provider',{expected_revision:t.revision,...d}),terminal(t)||!t.thread_id||!available(provider(d.provider_id))),!t.thread_id?h('p',{class:'auto-help'},'正式线程建立后可申请更换；确认前请编辑团队方案。'):queued?h('p',{class:'auto-gate'},'待安全边界生效；身份不变。'):null);}
 function paintActivity(){const r=ctx?.route();if(r?.name!=='auto')return;const slot=document.querySelector('.auto-live-messages'),s=state(r);if(slot&&s.task)slot.replaceChildren(...ctx.runningMessages(activityThread(r,s)));}
-return {configure,render,refresh,navigate,title,href,available,routeRecipients,deliveryLabel,paintActivity};
+const feedbackState=new Map();
+const feedbackTargetId=t=>t.binding_id||'listener:'+t.participant;
+function feedbackClientLabel(t){
+ if(!t.client||!(Date.parse(t.client_expires_at)>Date.now()))return '客户端未知';
+ const names={codex:'Codex',cursor:'Cursor',claude:'Claude Code','claude-code':'Claude Code'};
+ return Object.prototype.hasOwnProperty.call(names,t.client)?names[t.client]:t.client;
+}
+function parseFeedbackMention(draft,targets,selected=''){
+ const m=/^@([^\s@]+)\s+([\s\S]+)$/u.exec(draft);
+ if(!m||!m[2].trim())return null;
+ const matches=targets.filter(t=>t.participant===m[1]);
+ const target=matches.find(t=>feedbackTargetId(t)===selected)||(matches.length===1?matches[0]:null);
+ return target?{target,body:m[2].trim()}:null;
+}
+function threadFeedback(projectId,threadId){
+ const {h}=ctx,k=JSON.stringify([projectId,threadId]),id='thread-feedback-'+encodeURIComponent(k);
+ if(!feedbackState.has(k))feedbackState.set(k,{targets:null,selected:'',draft:'',busy:false,loading:false,notice:''});
+ const s=feedbackState.get(k),path='/api/auto/v1/projects/'+encodeURIComponent(projectId)+'/threads/'+encodeURIComponent(threadId)+'/feedback';
+ async function loadTargets(){
+  if(s.loading)return;
+  s.loading=true;
+  try{s.targets=arr((await request(path,{signal:AbortSignal.timeout(10000)})).targets);s.loadedAt=Date.now();s.loadError='';}
+  catch(e){s.loadError=e.message;}
+  finally{
+   s.loading=false;
+   const focused=document.activeElement?.id===id,caret=focused?document.activeElement.selectionStart:0;
+   paint();
+   if(focused){const next=document.getElementById(id);next?.focus();next?.setSelectionRange(caret,caret);}
+  }
+ }
+ if(!s.initialized){
+  s.initialized=true;
+  queueMicrotask(async()=>{
+   if(!authReady&&!connecting)await connect('',ctx.route());
+   if(authReady&&s.targets===null)await loadTargets();
+  });
+ }else if(authReady&&s.targets===null&&!s.loadError&&!s.loading){
+  s.loading=true;
+  queueMicrotask(()=>{s.loading=false;if(s.targets===null)void loadTargets();});
+ }
+ const actionProps={type:'button',class:'auto-btn primary'};
+ const list=h('div',{class:'thread-feedback-suggestions','aria-label':'可投递的协作者',hidden:true});
+ const box=h('textarea',{id,rows:2,maxlength:4050,disabled:s.busy||!!s.pending,
+  'aria-label':'输入 @协作者 和消息',placeholder:'输入 @ 协作者，再写消息',
+  oninput:()=>{
+   const wasMention=/^@[^\s@]*$/u.test(s.draft);
+   s.draft=box.value;if(!s.draft.startsWith('@'+s.selectedName+' '))s.selected='';sync();
+   if(!wasMention&&/^@[^\s@]*$/u.test(s.draft)&&authReady&&Date.now()-(s.loadedAt||0)>5000)void loadTargets();
+  },
+  onkeydown:e=>{
+   if(e.isComposing||e.keyCode===229)return;
+   if(e.key==='ArrowDown'&&!list.hidden){e.preventDefault();list.querySelector('button')?.focus();}
+   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send();}
+  }},s.draft);
+ const submit=h('button',{...actionProps,onclick:send},s.pending?'重试原请求':'发送');
+ function sync(){
+  const candidates=s.targets||[];
+  const prefix=/^@([^\s@]*)$/u.exec(s.draft);
+  const matches=prefix?candidates.filter(t=>t.participant.toLowerCase().startsWith(prefix[1].toLowerCase())):[];
+  const name=/^@([^\s@]+)\s/u.exec(s.draft)?.[1];
+  if(!prefix&&name&&!s.selected&&candidates.filter(t=>t.participant===name).length>1)
+   matches.push(...candidates.filter(t=>t.participant===name));
+  list.hidden=!matches.length||s.busy||!!s.pending;
+  list.replaceChildren(...matches.map(t=>h('button',{type:'button',class:'auto-btn',
+   onclick:()=>{
+    const rest=prefix?'':s.draft.replace(/^@[^\s@]+\s/u,'');
+    s.selected=feedbackTargetId(t);s.selectedName=t.participant;
+    s.draft='@'+t.participant+' '+rest;box.value=s.draft;sync();box.focus();
+   }},'@'+t.participant+' · '+feedbackClientLabel(t)+(candidates.filter(o=>o.participant===t.participant).length>1?' · '+t.binding_id:''))));
+  submit.disabled=s.busy||!authReady||(!s.pending&&!parseFeedbackMention(s.draft,candidates,s.selected));
+ }
+ async function send(){
+  if(s.busy||!authReady)return;
+  const mention=parseFeedbackMention(s.draft,s.targets||[],s.selected);
+  if(!s.pending&&!mention)return;
+  const attempt=s.pending||{key:crypto.randomUUID(),body:mention.target.vendor==='listener'?{participant:mention.target.participant,body:mention.body}:{binding_id:mention.target.binding_id,expected_revision:mention.target.revision,body:mention.body}};
+  s.pending=attempt;s.busy=true;s.notice='';paint();
+  try{
+   const result=await request(path,{method:'POST',body:attempt.body,idempotency:attempt.key,signal:AbortSignal.timeout(24000)});
+   s.pending=null;s.draft='';s.selected='';
+   s.notice=result.status==='inbox'?'已放入协作者收件箱，等候其监听读取。':result.status==='queued'?'已发送到会话队列，尚未确认已读。':'投递结果未知，请在目标会话确认；不会自动重发。';
+  }catch(e){
+   if(e.status&&e.status<500&&e.status!==408)s.pending=null;
+   if(e.code==='feedback_binding'||e.code==='feedback_recipient'){s.targets=null;s.selected='';}
+   s.notice=s.pending?'请求结果未知，可沿用原请求编号重试，不会重复入队。':e.message;
+  }finally{s.busy=false;paint();}
+ }
+ sync();
+ return h('div',{class:'thread-feedback'},
+  h('div',{class:'thread-feedback-compose'},box,submit),
+  list,
+  !authReady&&authError?h('form',{class:'thread-feedback-auth',onsubmit:e=>{e.preventDefault();void connect(authDraft.trim(),ctx.route());}},
+   h('input',{type:'password',autocomplete:'off','aria-label':'本地访问令牌',placeholder:'本地访问令牌',value:authDraft,oninput:e=>authDraft=e.target.value}),
+   h('button',{type:'submit',class:'auto-btn',disabled:connecting},'连接'),h('small',{role:'status'},authError)):null,
+  authReady&&s.loadError?h('div',{},h('small',{role:'status'},s.loadError),button('重新读取协作者',loadTargets,s.loading)):null,
+  h('small',{class:'auto-help'},authReady&&s.targets?.length===0?'本线程暂无可收件的协作者。':'Enter 发送 · Shift+Enter 换行'),
+  s.notice?h('p',{role:'status'},s.notice):null);
+}
+return {configure,render,refresh,navigate,title,href,available,routeRecipients,deliveryLabel,paintActivity,threadFeedback,parseFeedbackMention};
 });

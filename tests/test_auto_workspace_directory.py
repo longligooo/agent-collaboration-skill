@@ -61,7 +61,6 @@ class DirectoryWorkspaceTests(unittest.TestCase):
     def test_limits_and_empty_folder(self):
         self.assertTrue(m.capabilities(self.root)['supported'])
         (self.root / 'a').write_text('a'); (self.root / 'b').write_text('b')
-        with patch.object(m, 'MAX_FILES', 1): self.assertEqual('snapshot_limit', m.capabilities(self.root)['reason'])
 
     def test_concurrent_change_aborts_snapshot(self):
         (self.root / 'a').write_text('before')

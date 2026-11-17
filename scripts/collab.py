@@ -756,6 +756,10 @@ def render_inbox_text(report: Dict[str, Any]) -> str:
         f"count: {report['count']}",
     ]
     for item in report["items"]:
+        if item["decision"] == "FEEDBACK":
+            lines.append(f"- FEEDBACK thread={item['thread_id']} message={item['message_id']} "
+                         f"from=WebUI body={json.dumps(item['body'], ensure_ascii=False)}")
+            continue
         if item["decision"] == "INVALID":
             lines.append(f"- INVALID thread={item['thread_id']} error={item['error']}")
             continue
@@ -784,6 +788,18 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     if args.format not in INBOX_FORMATS:
         raise CollaborationError(f"--format must be one of {list(INBOX_FORMATS)}")
     report = inbox_report(root, agent, args.thread_id)
+    # A human-facing polling session can read feedback. Prompt/wake consumers
+    # still see only formal collaboration signals and never start on feedback.
+    client = args.client if args.client is not None else os.environ.get("COLLAB_CLIENT")
+    if args.format != "prompt":
+        import passive_feedback
+        if client:
+            import client_presence
+            client_presence.report(root, agent, client, args.thread_id)
+        feedback = passive_feedback.pending(root, agent, args.thread_id)
+        report["items"].extend(feedback)
+        report["count"] = len(report["items"])
+        report["needs_attention"] = bool(report["items"])
     if args.format == "json":
         emit(report)
     elif args.format == "text":
@@ -791,6 +807,15 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     elif report["needs_attention"]:
         print(attention_prompt(root, report))
     return 0 if report["needs_attention"] else 1
+
+
+def cmd_feedback_ack(args: argparse.Namespace) -> None:
+    import passive_feedback
+    root = repository_root(args.root)
+    agent = resolve_agent_argument(args.agent)
+    if not passive_feedback.acknowledge(root, agent, args.thread_id, args.message_id):
+        raise CollaborationError("feedback not found for this thread and participant")
+    emit({"result": "ACKNOWLEDGED", "message_id": args.message_id})
 
 
 def cmd_publish(args: argparse.Namespace) -> None:
@@ -836,13 +861,16 @@ def cmd_publish(args: argparse.Namespace) -> None:
     atomic_write_json(signal_path, signal)
     if args.in_message_id:
         mark_processed(root, args.thread_id, agent, args.in_message_id)
-    emit(
-        {
-            "result": "PUBLISHED",
-            "signal": relative_path(root, signal_path),
-            "message_id": message_id,
-        }
-    )
+    result = {"result": "PUBLISHED", "signal": relative_path(root, signal_path), "message_id": message_id}
+    # Notification is optional and must never turn a durable publish into a failure.
+    try:
+        import session_feedback
+        notice = session_feedback.notify_published(root, signal)
+        if notice is not None:
+            result["codex_notice"] = notice
+    except Exception:
+        result["codex_notice"] = "unavailable"
+    emit(result)
 
 
 def cmd_acknowledge(args: argparse.Namespace) -> None:
@@ -1538,6 +1566,7 @@ def build_parser() -> argparse.ArgumentParser:
     inbox_parser.add_argument("--root", default=".")
     inbox_parser.add_argument("--agent", help="defaults to COLLAB_AGENT")
     inbox_parser.add_argument("--thread-id")
+    inbox_parser.add_argument("--client", help="report this polling session's client (or set COLLAB_CLIENT)")
     inbox_parser.add_argument(
         "--format",
         default="json",
@@ -1545,6 +1574,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="json, text, or prompt",
     )
     inbox_parser.set_defaults(handler=cmd_inbox)
+
+    import listener_policy
+    listener_policy.add_parser(subparsers)
+
+    feedback_ack = subparsers.add_parser("feedback-ack", help="acknowledge a local WebUI feedback item")
+    feedback_ack.add_argument("--root", default=".")
+    feedback_ack.add_argument("--agent", help="defaults to COLLAB_AGENT")
+    feedback_ack.add_argument("--thread-id", required=True)
+    feedback_ack.add_argument("--message-id", required=True)
+    feedback_ack.set_defaults(handler=cmd_feedback_ack)
 
     publish_parser = subparsers.add_parser("publish", help="atomically publish a turn signal")
     publish_parser.add_argument("--root", default=".")

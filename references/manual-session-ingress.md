@@ -104,3 +104,7 @@ python -m unittest discover -s tests -v
 ```
 
 全为合成文档结构、临时目录、模拟时间；不会运行真实 vendor、安装 hooks 或读取真实会话。UI 消费应使用 `manual_ingress.snapshot(roots).observations` 独立证据区，不改变旧 process runtime API 的含义。
+
+## 在线程窗口发送反馈
+
+自动服务的 WebUI 可向本线程明确绑定的 Codex 会话入队反馈，见[反馈说明](thread-session-feedback.md)。

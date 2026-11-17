@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -28,6 +29,7 @@ class AutoService:
         self._stores = {}
         self._lock = threading.RLock()
         self._refresh = OrderedDict()
+        self._capabilities = {}
 
     def store(self, root, project_id):
         key = (str(root), project_id)
@@ -63,8 +65,19 @@ class AutoService:
 
     def project_capabilities(self, store):
         from auto_workspace import capabilities
-        return {'execution_workspace': capabilities(store.root, metadata_paths=self.metadata_paths(store)),
-                'application': {'status': 'pending', 'automatic': False}}
+        key = (str(store.root), store.project_id)
+        now = time.monotonic()
+        with self._lock:
+            cached = self._capabilities.get(key)
+            if cached and now - cached[0] < 30:
+                return cached[1]
+        result = {'execution_workspace': capabilities(store.root, metadata_paths=self.metadata_paths(store)),
+                  'application': {'status': 'pending', 'automatic': False}}
+        with self._lock:
+            self._capabilities[key] = (now, result)
+            if len(self._capabilities) > 32:
+                self._capabilities.pop(next(iter(self._capabilities)))
+        return result
 
     def _project(self, store, task, *, detail=False):
         result = dict(task)
@@ -148,6 +161,11 @@ class AutoService:
                     if len(self._refresh) > 128:
                         self._refresh.popitem(last=False)
                 return self._refresh[key]
+        if operation in {'feedback_targets', 'thread_feedback'}:
+            import session_feedback
+            if operation == 'feedback_targets':
+                return session_feedback.targets(root, params['thread_id'])
+            return session_feedback.send(root, params['thread_id'], body, key)
         store = self.store(root, params['project_id'])
         if operation == 'capabilities':
             return self.project_capabilities(store)

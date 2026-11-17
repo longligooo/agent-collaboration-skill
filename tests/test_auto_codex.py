@@ -100,6 +100,7 @@ class CodexTests(unittest.TestCase):
         self.assertNotIn('--yolo', argv)
         self.assertIn('features.shell_tool=false', argv)
         self.assertIn('features.hooks=false', argv)
+        self.assertIn('notify=[]', argv)
         self.assertIn('approval_policy="on-request"', argv)
         # Every JSON-RPC mode gets explicit startup overrides, not config writes.
         self.assertTrue(all(argv[i] == '-c' for i in range(2, len(argv), 2)))

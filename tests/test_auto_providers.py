@@ -26,14 +26,32 @@ class ProviderTests(unittest.TestCase):
     def registry(self, **kwargs):
         return ProviderRegistry(path=str(self.root), **kwargs)
 
+    def test_explicit_discovery_is_reused_without_probing(self):
+        home = self.root / 'ui-home'
+        with patch.dict(os.environ, {'COLLAB_UI_HOME': str(home)}):
+            source = self.registry()
+            source._cache = [{'id': 'codex', 'installed': True, 'auth_status': 'authenticated'},
+                             {'id': 'claude', 'installed': True, 'auth_status': 'authenticated'}]
+            source._checked = __import__('time').monotonic()
+            source._save_cache()
+            reused = self.registry()
+            def fail_probe(*args, **kwargs):
+                raise AssertionError('cached discovery must not probe')
+            reused._codex = reused._claude = reused._agy = fail_probe
+            cached = reused.discover()
+            self.assertEqual('authenticated', next(item for item in cached if item['id'] == 'claude')['auth_status'])
+            self.assertEqual('deferred', next(item for item in cached if item['id'] == 'agy')['unavailable_reason'])
+            self.assertFalse(any('SECRET' in item.read_text(encoding='utf-8') for item in home.glob('provider-discovery-*.json')))
+
     def test_missing_and_cache_only_no_probe(self):
         self.cli('codex', 'raise RuntimeError("must not run")\n')
         records = self.registry().discover()
         self.assertTrue(records[0]['installed'])
         self.assertEqual(records[0]['unavailable_reason'], 'discovery_required')
-        self.assertFalse(records[2]['installed'])
+        self.assertEqual('deferred', next(item for item in records if item['id'] == 'agy')['unavailable_reason'])
         records = ProviderRegistry(path='').discover(refresh=True)
-        self.assertTrue(all(r['unavailable_reason'] == 'not_installed' for r in records))
+        self.assertTrue(all(r['unavailable_reason'] == 'not_installed' for r in records if r['id'] != 'agy'))
+        self.assertEqual('deferred', records[-1]['unavailable_reason'])
 
     def codex(self, extra=''):
         self.cli('codex', "import sys,os,json\nsys.path.insert(0," + repr(str(Path(__file__).resolve().parent)) + ")\n" + '''
@@ -111,19 +129,15 @@ else:raise RuntimeError('not a supported command')
         self.assertEqual(record['auth_status'], 'unknown')
         self.assertEqual(record['probe_error'], 'invalid_auth_response')
 
-    def test_agy_no_gemini_fallback_and_unstructured_catalog(self):
-        self.cli('gemini', 'raise RuntimeError("must not execute")\n')
-        self.assertFalse(self.registry().discover()[2]['installed'])
-        self.cli('agy', '''import sys
-if sys.argv[1:]==['--help']:print('-p --output-format')
-elif sys.argv[1:]==['models']:print('Model ID | Status\\nexample-model | available')
-else:raise RuntimeError('unsupported command')
-''')
-        record = self.registry().discover(refresh=True)[2]
-        self.assertEqual(record['headless_status'], 'available')
-        self.assertEqual(record['auth_status'], 'unknown')
-        self.assertEqual(record['models'], [])
-        self.assertEqual(record['catalog_reason'], 'unstructured_catalog')
+    def test_deferred_agy_is_not_probed_or_executable(self):
+        self.cli('agy', 'raise RuntimeError("deferred provider must not execute")\n')
+        registry = self.registry()
+        record = registry.discover(refresh=True)[-1]
+        self.assertEqual(record['id'], 'agy')
+        self.assertEqual(record['unavailable_reason'], 'deferred')
+        self.assertFalse(record['installed'])
+        with self.assertRaisesRegex(ProviderError, 'unknown_provider'):
+            registry.build_launch('agy', prompt='Plan', cwd=self.root)
 
     def test_runtime_injection_env_not_inherited(self):
         with patch.dict(os.environ, {'NODE_OPTIONS':'execute-secret','PYTHONPATH':'bad','BASH_ENV':'bad'}):
@@ -156,7 +170,7 @@ else:raise RuntimeError('unsupported command')
 
     def test_execution_fail_closed_and_option_injection_rejected(self):
         registry = self.registry()
-        for provider in ('codex','claude','agy'):
+        for provider in ('codex','claude'):
             with self.assertRaisesRegex(ProviderError, 'isolation_unverified'):
                 registry.build_launch(provider,prompt='Plan',cwd=self.root)
             with self.assertRaisesRegex(ProviderError, 'invalid_model'):
@@ -225,7 +239,8 @@ else:raise RuntimeError('unsupported command')
 
     def test_parse_results(self):
         self.assertEqual(parse_result('claude', '{"result":"hello","is_error":false}'), 'hello')
-        self.assertEqual(parse_result('agy', b'{"status":"SUCCESS","response":"hello"}'), 'hello')
+        with self.assertRaisesRegex(ProviderError, 'unknown_provider'):
+            parse_result('agy', b'{"status":"SUCCESS","response":"hello"}')
         for raw in ('[]','{}','{"is_error":true}','not json'):
             with self.assertRaises(ProviderError):parse_result('claude',raw)
         with self.assertRaisesRegex(ProviderError, 'unsupported_result_format'):

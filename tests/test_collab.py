@@ -96,6 +96,64 @@ class CollaborationCliTest(unittest.TestCase):
         )
         return result["document"]
 
+    def test_codex_publish_notice_is_gated_deduplicated_and_best_effort(self):
+        import argparse
+        import contextlib
+        import io
+        import uuid
+        from unittest.mock import patch
+        with patch.object(sys, 'path', [str(SCRIPT.parent), *sys.path]):
+            import collab
+            import client_presence
+            import manual_ingress
+            import session_feedback
+        self.initialize()
+        document = self.create_completed_turn()
+        thread = 'design-thread'
+        sender, recipient = 'cursor', 'codex'  # participant names are not client inference
+        def publish(message_id):
+            args = argparse.Namespace(root=str(self.root), thread_id=thread, agent=sender,
+                to=recipient, document=document, in_message_id=None,
+                requested_action='REVIEW', message_id=message_id)
+            with patch.object(sys, 'path', [str(SCRIPT.parent), *sys.path]), contextlib.redirect_stdout(io.StringIO()) as output:
+                collab.cmd_publish(args)
+            return json.loads(output.getvalue())
+        sid = str(uuid.uuid4())
+        def bind(name, session_id):
+            manual_ingress.bind(self.root, name, thread, recipient, 'codex', session_id, 'fixture',
+                                consent_activity=True, accept_unverified_version=True)
+        bind('receiver-one', sid)
+        client_presence.report(self.root, sender, 'codex')
+        client_presence.report(self.root, recipient, 'cursor')
+        with patch.object(session_feedback.shutil, 'which', return_value=sys.executable), patch.object(
+                session_feedback, '_queue_codex') as queue:
+            self.assertNotIn('codex_notice', publish(str(uuid.uuid4())))
+            queue.assert_not_called()
+            client_presence.report(self.root, recipient, 'codex')
+            mid = str(uuid.uuid4())
+            def delivered(exe, target, text):
+                signal = collab.inspect_inbox(self.root, recipient, thread)['results'][0]
+                self.assertEqual(mid, signal['message']['message_id'])
+                self.assertEqual(target, sid)
+                self.assertIn(mid, text)
+                self.assertIn(thread, text)
+                self.assertNotIn(document, text)
+                return 'queued'
+            queue.side_effect = delivered
+            self.assertEqual('queued', publish(mid)['codex_notice'])
+            self.assertEqual('already_attempted', publish(mid)['codex_notice'])
+            queue.assert_called_once()
+            bind('receiver-two', str(uuid.uuid4()))
+            self.assertEqual('no_unique_binding', publish(str(uuid.uuid4()))['codex_notice'])
+            queue.assert_called_once()
+            manual_ingress.revoke(self.root, 'receiver-two')
+            queue.side_effect = OSError('synthetic queue failure')
+            failed = str(uuid.uuid4())
+            result = publish(failed)
+            self.assertEqual(('PUBLISHED', 'unavailable'), (result['result'], result['codex_notice']))
+            self.assertEqual('already_attempted', publish(failed)['codex_notice'])
+            self.assertEqual(failed, collab.inspect_inbox(self.root, recipient, thread)['results'][0]['message']['message_id'])
+
     def test_full_publish_inspect_and_acknowledge_flow(self):
         self.initialize()
         document = self.create_completed_turn()

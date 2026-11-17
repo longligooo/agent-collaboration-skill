@@ -325,7 +325,7 @@ function renderThread(projectId, threadId) {
     detailErrors.has(key) ? h("p", { class: "inline-warning" }, `完整记录读取失败：${detailErrors.get(key)}。保留已加载记录，可能不是最新状态。`) : detailPending.has(key) && !details.has(key) ? h("p", { class: "inline-info" }, "正在读取完整记录…") : null,
     M.array(thread.history_errors).length || M.array(thread.turns).some(turn => turn.error) || thread.projection_error ? h("p", { class: "inline-warning" }, "部分历史或任务信息无法读取；未核实的来源不作为人类原话展示。") : null,
     h("div", { class: "messages", "data-scroll-key": `${key}/${messageFilter}`, "aria-label": "聊天历史" }, h("div", { class: "date-rule" }, "按记录时间排序 · 只读"), visible.length ? visible.map((entry, index) => messageNode(entry, thread, index)) : h("div", { class: "empty" }, "还没有此类记录。"), h("div", { class: "live-messages", "data-thread-key": key }, messageFilter === "all" ? runningMessages(thread) : null)),
-    h("div", { class: "read-only" }, h("span", {}, icon("lock"), "只读协作记录 · 不支持在此发送消息"), h("span", { class: "activity-health" }, activityError ? "执行观测暂不可用" : "仅新鲜执行观测显示动效")),
+    h("div", { class: "read-only" }, h("span", {}, icon("lock"), "协作记录只读"), window.AutoUI?.threadFeedback(projectId, threadId), h("span", { class: "activity-health" }, activityError ? "执行观测暂不可用" : "仅新鲜执行观测显示动效")),
   ), inspector(thread));
 }
 function signalCard(signal) { return h("div", { class: "card" }, h("div", { class: "card-top" }, `${signal.from || "?"} → ${signal.to || "?"}`, h("span", { class: "meta" }, formatTime(signal.created_at))), h("div", { class: "pills" }, h("span", { class: "pill" }, signal.decision), signal.requested_action ? h("span", { class: "pill" }, signal.requested_action) : null), signal.error ? h("p", { class: "warning" }, signal.error) : null); }

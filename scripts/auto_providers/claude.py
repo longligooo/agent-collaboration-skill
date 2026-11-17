@@ -165,16 +165,46 @@ def parse_auth_status(code, output):
     return 'unknown'
 
 
-def configured_models(env):
-    """Expose configured model IDs, not credentials or a verified catalogue."""
+def configured_model_catalog(env):
+    """Read the trusted user model picker; never claim account verification."""
+    import json
     from . import MODEL_ID
-    result = []
-    seen = set()
-    for name in ('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-                 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-                 'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL'):
-        model = env.get(name)
-        if isinstance(model, str) and MODEL_ID.fullmatch(model) and model not in seen:
-            seen.add(model)
-            result.append({'id': model, 'label': model + ' · 本地配置，未验证'})
-    return result
+    from .environment import _read
+    home = env.get('HOME') or env.get('USERPROFILE')
+    directory = env.get('CLAUDE_CONFIG_DIR') or (str(Path(home) / '.claude') if home else None)
+    config = _read(Path(directory) / 'settings.json', json.loads) if directory else {}
+    picker = config.get('modelPicker')
+    result, seen, replace = [], set(), False
+    if picker is not None:
+        if not isinstance(picker, dict):
+            raise ProviderError('invalid_catalog')
+        replace, options = picker.get('replaceBuiltInOptions', False), picker.get('options', [])
+        if type(replace) is not bool or not isinstance(options, list) or len(options) > 1000:
+            raise ProviderError('invalid_catalog')
+        for option in options:
+            if not isinstance(option, dict):
+                raise ProviderError('invalid_catalog')
+            model, label = option.get('model'), option.get('label', option.get('model'))
+            if (not isinstance(model, str) or not MODEL_ID.fullmatch(model)
+                    or not isinstance(label, str) or not label.strip() or len(label) > 1200
+                    or any(ord(c) < 32 or ord(c) == 127 for c in label)):
+                raise ProviderError('invalid_catalog')
+            if model not in seen:
+                seen.add(model)
+                result.append({'id': model, 'label': label + ' · 本地配置，未验证'})
+    if not replace:
+        for name in ('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+                     'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                     'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL'):
+            model = env.get(name)
+            if isinstance(model, str) and MODEL_ID.fullmatch(model) and model not in seen:
+                seen.add(model)
+                result.append({'id': model, 'label': model + ' · 本地配置，未验证'})
+    source = ('claude.local_model_picker' if picker is not None else
+              'claude.local_config' if result else 'claude.agent-sdk.supportedModels')
+    return result, source
+
+
+def configured_models(env):
+    """Configured IDs are not a verified provider catalogue."""
+    return configured_model_catalog(env)[0]

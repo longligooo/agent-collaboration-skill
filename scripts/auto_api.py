@@ -123,6 +123,11 @@ class Gateway:
             return 'providers', {}, None
         if path == PREFIX + '/providers/refresh' and method == 'POST':
             return 'refresh_providers', {}, None
+        feedback = re.fullmatch(PREFIX + r'/projects/(' + ID + r')/threads/(' + ID + r')/feedback', path)
+        if feedback and method in {'GET', 'POST'}:
+            project, thread = feedback.groups()
+            return ('feedback_targets' if method == 'GET' else 'thread_feedback',
+                    {'project_id': project, 'thread_id': thread}, self.project_root(project))
         capability = re.fullmatch(PREFIX + r'/projects/(' + ID + r')/capabilities', path)
         if capability and method == 'GET':
             project = capability.group(1)
@@ -167,6 +172,7 @@ class Gateway:
             'retry': ({'expected_revision', 'job_id'}, set()),
             'change_provider': ({'expected_revision', 'provider_id'}, {'model_id'}),
             'send_message': ({'body'}, {'recipients'}),
+            'thread_feedback': ({'body'}, {'binding_id', 'expected_revision', 'participant'}),
         }
         required, optional = schemas[operation]
         if set(body) - required - optional or required - set(body):
@@ -181,6 +187,12 @@ class Gateway:
         for field in ('title', 'instruction', 'body', 'provider_id', 'job_id'):
             if field in body and (not isinstance(body[field], str) or not body[field].strip()):
                 raise ApiError('invalid_field', 'nonempty text required', 422)
+        if operation == 'thread_feedback':
+            route = set(body) - {'body'}
+            field = 'participant' if route == {'participant'} else 'binding_id'
+            if (route not in ({'participant'}, {'binding_id', 'expected_revision'})
+                    or not isinstance(body.get(field), str) or not re.fullmatch(ID, body[field])):
+                raise ApiError('invalid_binding', 'choose one participant inbox or registered binding', 422)
         if 'model_id' in body and body['model_id'] is not None and not isinstance(body['model_id'], str):
             raise ApiError('invalid_field', 'invalid model', 422)
         if 'recipients' in body and (not isinstance(body['recipients'], list) or not all(isinstance(x, str) for x in body['recipients'])):
@@ -259,7 +271,7 @@ class Gateway:
                     raise ApiError('invalid_body', 'JSON object required')
                 self.validate_body(operation, body)
             result = {'csrf_token': self.credentials.csrf, 'enabled': True} if operation == 'session' else self.dispatch(operation, params, root, body, key)
-            status = 201 if operation == 'create_task' else 202 if operation == 'send_message' else 200
+            status = 201 if operation == 'create_task' else 202 if operation in {'send_message', 'thread_feedback'} else 200
             handler.respond(status, {'schema_version': 1, **result})
         except ApiError as exc:
             handler.close_connection = True

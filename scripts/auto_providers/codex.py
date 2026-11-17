@@ -209,6 +209,9 @@ def config_overrides(phase, cwd):
         "shell_environment_policy.include_only": ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"],
         "shell_environment_policy.set": {},
         "permissions." + name: permission_profile(phase, root),
+        # Clear only this invocation. A verified empty list cannot launch the
+        # user's external notify command; the config file itself is unchanged.
+        "notify": [],
     })
     return values
 
@@ -327,7 +330,9 @@ def verify_effective_config(config, phase, cwd, *, inventory_only=False):
         raise ProviderError("codex_mcp_enabled")
     # Managed hooks can be independently enforced. Refuse even configured hooks
     # instead of guessing whether disabling the feature suppresses every source.
-    if config.get("hooks") or config.get("notify"):
+    # notify=[] is a per-invocation override. Empty is required; any other value
+    # means an external notification command could still run.
+    if config.get("hooks") or config.get("notify") not in (None, []):
         raise ProviderError("codex_hooks_configured")
     if config.get("environments") or config.get("remote_execution"):
         raise ProviderError("codex_remote_environment_unverified")

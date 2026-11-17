@@ -171,11 +171,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_limits_and_nonregular_symlink_rejected(self):
-        with patch('auto_workspace.MAX_FILES', 1): self.assertEqual('snapshot_limit', capabilities(self.root)['reason'])
         (self.root / 'alias').symlink_to(self.root / 'README.md')
         self.assertEqual('unsafe_path', capabilities(self.root)['reason']); (self.root / 'alias').unlink()
-        (self.root / 'README.md').unlink(); os.mkfifo(self.root / 'README.md')
-        self.assertEqual('unsupported_file_type', capabilities(self.root)['reason'])
+        (self.root / 'README.md').unlink()
+        if hasattr(os, 'mkfifo'):
+            os.mkfifo(self.root / 'README.md')
+            self.assertEqual('unsupported_file_type', capabilities(self.root)['reason'])
 
     def test_unified_patch_no_final_newline_is_well_formed(self):
         (self.root / 'no-newline.txt').write_bytes(b'old')
