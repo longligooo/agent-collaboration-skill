@@ -1,6 +1,6 @@
 ---
 name: agent-collaboration
-description: Coordinate durable, file-based collaboration among AI coding tools and human participants. Use when Codex, Claude Code, Cursor, or another agent must discuss a design, challenge assumptions, hand off implementation, review code or plans, verify results, record a decision, or close a multi-round task without overwriting another participant's work. Write a human requirement as a spec and tickets before dispatch. Do not implement or open a collaboration thread without a ticket that locks that one acceptance.
+description: Coordinate durable, file-based collaboration among AI coding tools and human participants. Use when Codex, Claude Code, Cursor, or another agent must discuss a design, challenge assumptions, hand off implementation, review code or plans, verify results, record a decision, or close a multi-round task without overwriting another participant's work. Write a human requirement as a spec and tickets before dispatch.
 ---
 
 # Agent Collaboration
@@ -8,6 +8,8 @@ description: Coordinate durable, file-based collaboration among AI coding tools 
 Coordinate agents through immutable Markdown turns and small JSON signals stored in the shared repository. Treat repository artifacts and current code as facts; treat chat context and signals only as notifications.
 
 ## Load The Protocol
+
+Do not implement or open a collaboration thread without a ticket that locks that one acceptance.
 
 Read [references/protocol.md](references/protocol.md) before creating or processing a collaboration thread. Read [references/tickets.md](references/tickets.md) before writing a spec, writing a ticket, dispatching work, or opening a thread. Read [references/artifact-format.md](references/artifact-format.md) when writing a turn. Read [references/tool-adapters.md](references/tool-adapters.md) only when configuring a coding tool to discover this skill or monitor signals.
 
